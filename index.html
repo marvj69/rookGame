@@ -1,0 +1,1352 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Rook - Mobile Edition</title>
+    <style>
+        :root {
+            --card-w-base: 14vw;
+            --card-w-max: 80px;
+            --card-ratio: 1.4;
+
+            /* Palette */
+            --table-primary: #1e3c1b;
+            --table-secondary: #0f220e;
+            --accent-gold: #ffb300;
+            --accent-shine: #ffe57f;
+            --text-white: #ffffff;
+            --glass-bg: rgba(0, 0, 0, 0.4);
+            --glass-border: rgba(255, 255, 255, 0.15);
+
+            /* Card Colors */
+            --c-red: #e53935;
+            --c-green: #43a047;
+            --c-black: #212121;
+            --c-yellow: #fdd835;
+        }
+
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: radial-gradient(circle at center, var(--table-primary), var(--table-secondary));
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            color: var(--text-white);
+            height: 100vh;
+            width: 100vw;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Subtle noise texture for felt look */
+        body::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.05'/%3E%3C/svg%3E");
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* --- HUD Header --- */
+        #hud {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            padding: 8px 16px;
+            z-index: 50;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            background: linear-gradient(to bottom, rgba(0, 0, 0, 0.6), transparent);
+            pointer-events: none;
+            /* Let clicks pass through */
+        }
+
+        .hud-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            pointer-events: auto;
+        }
+
+        .pill {
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(4px);
+            border: 1px solid var(--glass-border);
+            padding: 4px 12px;
+            border-radius: 16px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #ddd;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        .pill span.val {
+            color: white;
+            font-weight: 700;
+            font-size: 13px;
+        }
+
+        .pill#trump-pill {
+            border-color: rgba(255, 255, 255, 0.3);
+        }
+
+        .menu-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            cursor: pointer;
+            color: white;
+            pointer-events: auto;
+        }
+
+        /* --- Game Table Layout --- */
+        #game-table {
+            position: relative;
+            flex: 1;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1;
+        }
+
+        /* Player Avatars */
+        .avatar-container {
+            position: absolute;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            transition: all 0.3s;
+        }
+
+        .top-player {
+            top: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+
+        .left-player {
+            top: 45%;
+            left: 10px;
+            transform: translateY(-50%);
+        }
+
+        .right-player {
+            top: 45%;
+            right: 10px;
+            transform: translateY(-50%);
+        }
+
+        .avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: linear-gradient(145deg, #333, #111);
+            border: 2px solid #555;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+            color: #888;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            position: relative;
+        }
+
+        .avatar.active {
+            border-color: var(--accent-gold);
+            color: var(--accent-gold);
+            box-shadow: 0 0 15px var(--accent-gold);
+        }
+
+        /* Speech Bubble */
+        .bubble {
+            position: absolute;
+            background: white;
+            color: #222;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+            white-space: nowrap;
+            opacity: 0;
+            transform: scale(0.8);
+            transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            pointer-events: none;
+            z-index: 20;
+        }
+
+        .bubble.visible {
+            opacity: 1;
+            transform: scale(1);
+        }
+
+        /* Bubble Positioning */
+        .top-player .bubble {
+            top: 55px;
+        }
+
+        .left-player .bubble {
+            left: 55px;
+            top: 10px;
+        }
+
+        .right-player .bubble {
+            right: 55px;
+            top: 10px;
+        }
+
+        /* --- Play Area (Center) --- */
+        #play-area {
+            position: absolute;
+            top: 45%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 260px;
+            height: 200px;
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        /* --- Cards --- */
+        .card {
+            width: clamp(50px, var(--card-w-base), var(--card-w-max));
+            height: calc(clamp(50px, var(--card-w-base), var(--card-w-max)) * var(--card-ratio));
+            background-color: #fdfdfd;
+            border-radius: 6px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
+            position: absolute;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            font-family: "Georgia", serif;
+            font-weight: 900;
+            font-size: clamp(18px, 4vw, 26px);
+            transform-origin: bottom center;
+            transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.2s;
+            will-change: transform;
+            cursor: pointer;
+            -webkit-backface-visibility: hidden;
+        }
+
+        /* Card Colors */
+        .card.red {
+            color: var(--c-red);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        .card.green {
+            color: var(--c-green);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        .card.black {
+            color: var(--c-black);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        .card.yellow {
+            color: var(--c-yellow);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            text-shadow: 0px 0px 1px rgba(0, 0, 0, 0.2);
+        }
+
+        .card.rook {
+            background: radial-gradient(circle, #fff, #f0f0f0);
+            color: purple;
+            border: 2px solid purple;
+        }
+
+        .card.back {
+            background: repeating-linear-gradient(135deg, #17351f, #17351f 6px, #205029 6px, #205029 12px);
+            border: 1px solid rgba(0, 0, 0, 0.2);
+            color: transparent;
+        }
+
+        .card.back .card-inner,
+        .card.back .card-corner {
+            visibility: hidden;
+        }
+
+        /* Card Details */
+        .card-inner {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            pointer-events: none;
+        }
+
+        .card-corner {
+            position: absolute;
+            font-size: 0.5em;
+            font-family: sans-serif;
+            font-weight: 700;
+            opacity: 0.8;
+        }
+
+        .tl {
+            top: 4px;
+            left: 4px;
+        }
+
+        .br {
+            bottom: 4px;
+            right: 4px;
+            transform: rotate(180deg);
+        }
+
+        /* Hand Interaction */
+        .bottom-area {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            height: 35vh;
+            /* Reserve space */
+            display: flex;
+            justify-content: center;
+            align-items: flex-end;
+            z-index: 100;
+            padding-bottom: 10px;
+            pointer-events: none;
+            /* Allow clicking through empty space */
+        }
+
+        .hand-container {
+            position: relative;
+            width: 100%;
+            max-width: 600px;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            pointer-events: none;
+        }
+
+        .hand-card {
+            position: absolute;
+            bottom: -20px;
+            /* Hide bottom slightly */
+            box-shadow: -2px 0 8px rgba(0, 0, 0, 0.2);
+            pointer-events: auto;
+            transition: transform 0.2s ease-out, bottom 0.2s;
+        }
+
+        .hand-card.selected {
+            transform: translateY(-40px) scale(1.1) !important;
+            z-index: 999 !important;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.4);
+            border: 2px solid var(--accent-gold);
+        }
+
+        .hand-card.playable {
+            cursor: pointer;
+        }
+
+        .hand-card.unplayable {
+            filter: grayscale(0.8) brightness(0.7);
+        }
+
+        body.bid-focus .bottom-area {
+            z-index: 1200;
+        }
+
+        body.bid-focus .hand-card {
+            pointer-events: none;
+        }
+
+        /* Played Cards on Table */
+        .played-card {
+            position: absolute;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+            transition: all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        /* --- Action Button (FAB) --- */
+        #play-btn {
+            position: absolute;
+            bottom: clamp(140px, 25vh, 200px);
+            /* Position above hand */
+            left: 50%;
+            transform: translateX(-50%) scale(0.8);
+            opacity: 0;
+            background: linear-gradient(135deg, var(--accent-gold), #ff8f00);
+            color: #3e2723;
+            font-weight: 800;
+            border: none;
+            padding: 12px 32px;
+            border-radius: 50px;
+            font-size: 16px;
+            letter-spacing: 1px;
+            box-shadow: 0 4px 15px rgba(255, 179, 0, 0.5);
+            z-index: 200;
+            pointer-events: none;
+            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        #play-btn.visible {
+            opacity: 1;
+            transform: translateX(-50%) scale(1);
+            pointer-events: auto;
+        }
+
+        #play-btn:active {
+            transform: translateX(-50%) scale(0.95);
+        }
+
+        /* --- Kitty & Alerts --- */
+        #kitty-display {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(20, 20, 20, 0.85);
+            backdrop-filter: blur(8px);
+            padding: 20px;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            z-index: 1100;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            /* Above modal overlay so cards stay visible */
+        }
+
+        .kitty-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .kitty-row .card {
+            position: relative;
+            transform: none !important;
+            margin: 0;
+        }
+
+        .toast {
+            position: absolute;
+            top: 20%;
+            left: 50%;
+            transform: translateX(-50%) translateY(-20px);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 25px;
+            font-size: 14px;
+            font-weight: 600;
+            opacity: 0;
+            transition: all 0.3s;
+            pointer-events: none;
+            z-index: 300;
+            white-space: nowrap;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        /* --- Modals (Glassmorphism) --- */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(5px);
+            z-index: 1000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #bid-modal {
+            background: rgba(0, 0, 0, 0.65);
+            backdrop-filter: none;
+        }
+
+        .modal-card {
+            background: linear-gradient(160deg, #2a2a2a, #1a1a1a);
+            width: 90%;
+            max-width: 360px;
+            padding: 24px;
+            border-radius: 20px;
+            border: 1px solid #444;
+            text-align: center;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+            animation: popIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        @keyframes popIn {
+            from {
+                transform: scale(0.9);
+                opacity: 0;
+            }
+
+            to {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        .modal-title {
+            margin: 0 0 10px;
+            font-size: 24px;
+            font-weight: 800;
+            color: white;
+            letter-spacing: -0.5px;
+        }
+
+        .modal-subtitle {
+            color: #aaa;
+            font-size: 14px;
+            margin-bottom: 20px;
+            line-height: 1.4;
+        }
+
+        .grid-options {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-bottom: 15px;
+        }
+
+        .color-options {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-bottom: 15px;
+        }
+
+        .btn-primary,
+        .btn-secondary,
+        .btn-opt {
+            border: none;
+            padding: 12px;
+            border-radius: 12px;
+            font-weight: 700;
+            font-size: 14px;
+            cursor: pointer;
+            transition: transform 0.1s;
+            width: 100%;
+        }
+
+        .btn-primary {
+            background: var(--accent-gold);
+            color: #3e2723;
+            box-shadow: 0 4px 0 #c48b00;
+            margin-bottom: 8px;
+        }
+
+        .btn-primary:active {
+            transform: translateY(4px);
+            box-shadow: none;
+        }
+
+        .btn-secondary {
+            background: transparent;
+            border: 2px solid #555;
+            color: #ccc;
+        }
+
+        .btn-opt {
+            background: #333;
+            color: white;
+            box-shadow: 0 3px 0 #111;
+        }
+
+        .btn-opt:active {
+            transform: translateY(3px);
+            box-shadow: none;
+        }
+
+        /* Color Buttons */
+        .btn-red {
+            background: var(--c-red);
+            color: white;
+        }
+
+        .btn-green {
+            background: var(--c-green);
+            color: white;
+        }
+
+        .btn-black {
+            background: #333;
+            border: 1px solid #555;
+            color: white;
+        }
+
+        .btn-yellow {
+            background: var(--c-yellow);
+            color: black;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- Background Elements -->
+    <div id="hud">
+        <div class="hud-group">
+            <div class="pill" id="trump-pill">
+                Trump: <span class="val" id="trump-val">-</span>
+            </div>
+            <div class="pill">
+                Bid: <span class="val" id="bid-val">-</span>
+            </div>
+        </div>
+
+        <div class="hud-group" style="align-items: flex-end;">
+            <div class="pill">US: <span class="val" id="score-us">0</span></div>
+            <div class="pill">THEM: <span class="val" id="score-them">0</span></div>
+        </div>
+
+        <button class="menu-btn" onclick="showSettings(false)">☰</button>
+    </div>
+
+    <!-- Game Table -->
+    <div id="game-table">
+
+        <!-- Opponents -->
+        <div class="avatar-container top-player">
+            <div class="avatar" id="p2-av">N</div>
+            <div class="bubble" id="p2-bubble"></div>
+        </div>
+        <div class="avatar-container left-player">
+            <div class="avatar" id="p1-av">W</div>
+            <div class="bubble" id="p1-bubble"></div>
+        </div>
+        <div class="avatar-container right-player">
+            <div class="avatar" id="p3-av">E</div>
+            <div class="bubble" id="p3-bubble"></div>
+        </div>
+
+        <!-- Center Play Area -->
+        <div id="play-area"></div>
+
+        <!-- Kitty Pop-up Display -->
+        <div id="kitty-display">
+            <div style="font-weight:bold; text-transform:uppercase; font-size:12px; color:#aaa;">Kitty</div>
+            <div class="kitty-row" id="kitty-cards"></div>
+        </div>
+
+        <!-- Action Button (Floats above hand) -->
+        <button id="play-btn" onclick="humanPlayCard()">PLAY CARD</button>
+
+        <!-- Player Hand -->
+        <div class="bottom-area">
+            <div class="hand-container" id="player-hand"></div>
+        </div>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="toast">Message</div>
+
+    <!-- --- MODALS --- -->
+
+    <!-- Landing Screen -->
+    <div id="landing-modal" class="modal" style="display:flex;">
+        <div class="modal-card">
+            <h1 class="modal-title" style="font-size: 40px; color:var(--accent-gold)">ROOK</h1>
+            <p class="modal-subtitle">Mobile Edition</p>
+            <button class="btn-primary" onclick="startGame()">START NEW GAME</button>
+            <button class="btn-secondary" onclick="showSettings(true)">OPTIONS</button>
+        </div>
+    </div>
+
+    <!-- Bidding -->
+    <div id="bid-modal" class="modal">
+        <div class="modal-card">
+            <h2 class="modal-title">Your Bid</h2>
+            <p class="modal-subtitle">Current High: <span id="modal-high-bid"
+                    style="color:white; font-weight:bold;">-</span></p>
+            <div class="grid-options" id="bid-grid"></div>
+            <div style="display:flex; gap:10px; margin-top:10px;">
+                <button class="btn-secondary" style="flex:1; border-color:#d32f2f; color:#e57373"
+                    onclick="humanPass()">PASS</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Trump Selection -->
+    <div id="trump-modal" class="modal">
+        <div class="modal-card">
+            <h2 class="modal-title">Choose Trump</h2>
+            <div class="color-options">
+                <button class="btn-opt btn-red" onclick="humanSelectTrump('Red')">RED</button>
+                <button class="btn-opt btn-green" onclick="humanSelectTrump('Green')">GREEN</button>
+                <button class="btn-opt btn-black" onclick="humanSelectTrump('Black')">BLACK</button>
+                <button class="btn-opt btn-yellow" onclick="humanSelectTrump('Yellow')">YELLOW</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Kitty Discard -->
+    <div id="kitty-modal" class="modal">
+        <div class="modal-card" style="background: rgba(0,0,0,0.8);"> <!-- Transparent to see hand -->
+            <h2 class="modal-title">The Kitty</h2>
+            <p class="modal-subtitle">Tap 5 cards in your hand to discard.</p>
+            <button class="btn-primary" id="confirm-discard-btn" onclick="confirmDiscard()">CONFIRM (0/5)</button>
+        </div>
+    </div>
+
+    <!-- Round End -->
+    <div id="round-end-modal" class="modal">
+        <div class="modal-card">
+            <h2 class="modal-title" id="round-result-title">Round Over</h2>
+            <p class="modal-subtitle" id="round-result-detail" style="white-space: pre-line;"></p>
+            <button class="btn-primary" onclick="startRound()">NEXT ROUND</button>
+        </div>
+    </div>
+
+    <!-- Settings -->
+    <div id="menu-modal" class="modal">
+        <div class="modal-card">
+            <h2 class="modal-title">Settings</h2>
+            <div style="text-align:left; margin-bottom:20px; color:#ccc;">
+                <label
+                    style="display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid #444;">
+                    Must Win Bid <input type="checkbox" id="opt-must-win">
+                </label>
+            </div>
+            <button class="btn-primary" onclick="startGame()">RESTART GAME</button>
+            <button class="btn-secondary" onclick="closeSettings()">CLOSE</button>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * ROOK GAME ENGINE - OPTIMIZED FOR MOBILE
+         */
+
+        const COLORS = ['Red', 'Green', 'Black', 'Yellow'];
+        const CARD_VALUES = { 1: 15, 14: 10, 10: 10, 5: 5, 'ROOK': 20 };
+        const WIN_SCORE = 1000;
+        const DISCARD_COUNT = 5;
+
+        let state = {
+            deck: [], kitty: [], kittyPoints: 0,
+            hands: [[], [], [], []],
+            scores: { us: 0, them: 0 },
+            dealer: 0, currentTurn: 0,
+            bidInfo: { active: false, highBid: 0, bidder: null, passed: [false, false, false, false] },
+            trump: null, tricks: [], currentTrick: [],
+            pointsTaken: { us: 0, them: 0 },
+            phase: 'MENU',
+            settings: { mustWinByBid: false },
+        };
+
+        let selectedCardIndex = -1;
+        let discardSelection = [];
+        let pendingDiscardSelection = null;
+        let activeTimeouts = [];
+
+        // --- Utility ---
+        const $ = id => document.getElementById(id);
+        const hide = id => $(id).style.display = 'none';
+        const showFlex = id => $(id).style.display = 'flex';
+        const setBidFocus = active => document.body.classList.toggle('bid-focus', active);
+        const showToast = (msg) => {
+            const t = $('toast');
+            t.innerText = msg;
+            t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), 2000);
+        };
+
+        function clearAllTimeouts() {
+            activeTimeouts.forEach(t => clearTimeout(t));
+            activeTimeouts = [];
+        }
+        function delay(fn, ms) {
+            const t = setTimeout(fn, ms);
+            activeTimeouts.push(t);
+            return t;
+        }
+
+        // --- Card Class ---
+        class Card {
+            constructor(color, rank, id) {
+                this.color = color;
+                this.rank = rank;
+                this.id = id;
+                this.value = this.color === 'ROOK' ? 20 : (CARD_VALUES[rank] || 0);
+            }
+            getPower(trump, lead) {
+                let effColor = this.color === 'ROOK' ? trump : this.color;
+                // Rank 1 should sit below rank 2 in trick power, despite being worth 15 points.
+                let baseRankPower = (this.rank === 1) ? 1.5 : this.rank;
+                let power = (this.color === 'ROOK') ? 0.5 : baseRankPower;
+                if (effColor === trump) return 500 + power;
+                if (effColor === lead) return 100 + power;
+                return power;
+            }
+        }
+
+        // --- Game Loop ---
+        function startGame() {
+            hide('landing-modal'); hide('menu-modal');
+            state.scores = { us: 0, them: 0 };
+            state.dealer = Math.floor(Math.random() * 4);
+            updateHUD();
+            startRound();
+        }
+
+        function startRound() {
+            hide('round-end-modal');
+
+            // Reset
+            state.trump = null;
+            state.pointsTaken = { us: 0, them: 0 };
+            state.kittyPoints = 0;
+            state.currentTrick = [];
+            state.tricks = [];
+            state.bidInfo = { active: true, highBid: 95, bidder: null, passed: [false, false, false, false] };
+
+            // Deal
+            let deck = [];
+            let id = 0;
+            COLORS.forEach(c => { for (let r = 1; r <= 14; r++) deck.push(new Card(c, r, id++)); });
+            deck.push(new Card('ROOK', 0, id++));
+
+            // Shuffle
+            for (let i = deck.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [deck[i], deck[j]] = [deck[j], deck[i]];
+            }
+
+            state.kitty = deck.slice(0, 5);
+            let dealIdx = 5;
+            for (let i = 0; i < 4; i++) {
+                state.hands[i] = deck.slice(dealIdx, dealIdx + 13);
+                sortHand(state.hands[i]);
+                dealIdx += 13;
+            }
+
+            state.dealer = (state.dealer + 1) % 4;
+            state.currentTurn = (state.dealer + 1) % 4;
+            state.phase = 'BID';
+
+            updateHUD();
+            renderHand();
+            $('play-area').innerHTML = '';
+            showToast("Bidding Starts");
+
+            processTurn();
+        }
+
+        function processTurn() {
+            updateActiveAvatar();
+
+            if (state.phase === 'BID') {
+                let activeCount = state.bidInfo.passed.filter(p => !p).length;
+                if (activeCount === 1 && state.bidInfo.highBid >= 100) {
+                    endBidding();
+                    return;
+                }
+                if (state.bidInfo.passed[state.currentTurn]) {
+                    advanceTurn(); return;
+                }
+                if (state.currentTurn === 0) {
+                    showBidUI();
+                } else {
+                    delay(() => botBid(state.currentTurn), 800);
+                }
+            } else if (state.phase === 'PLAY') {
+                if (state.currentTrick.length === 4) {
+                    delay(resolveTrick, 1500);
+                    return;
+                }
+                if (state.currentTurn === 0) {
+                    // Human logic handled by interaction
+                    renderHand(); // Refresh playable state
+                } else {
+                    delay(() => botPlay(state.currentTurn), 800);
+                }
+            }
+        }
+
+        function advanceTurn() {
+            state.currentTurn = (state.currentTurn + 1) % 4;
+            processTurn();
+        }
+
+        // --- Bidding ---
+        function showBidUI() {
+            const min = Math.max(100, state.bidInfo.highBid + 5);
+            const grid = $('bid-grid');
+            grid.innerHTML = '';
+            $('modal-high-bid').innerText = state.bidInfo.highBid;
+
+            for (let b = min; b <= 150; b += 5) { // Cap UI at 150 to save space, logic can go higher
+                let btn = document.createElement('button');
+                btn.className = 'btn-opt';
+                btn.innerText = b;
+                btn.onclick = () => { hide('bid-modal'); submitBid(0, b); };
+                grid.appendChild(btn);
+            }
+            setBidFocus(true);
+            showFlex('bid-modal');
+        }
+
+        function humanPass() { hide('bid-modal'); submitBid(0, 0); }
+
+        function botBid(pid) {
+            // Simple Bot Logic: Randomish but progressive
+            let current = state.bidInfo.highBid;
+            let chance = Math.random();
+            if (current < 120 && chance > 0.3) {
+                submitBid(pid, current + 5);
+            } else {
+                submitBid(pid, 0);
+            }
+        }
+
+        function submitBid(pid, amount) {
+            if (amount > 0) {
+                state.bidInfo.highBid = amount;
+                state.bidInfo.bidder = pid;
+                showBubble(pid, amount.toString());
+            } else {
+                state.bidInfo.passed[pid] = true;
+                showBubble(pid, "Pass");
+            }
+            updateHUD();
+            if (pid === 0) setBidFocus(false);
+            advanceTurn();
+        }
+
+        function endBidding() {
+            let winner = state.bidInfo.bidder !== null ? state.bidInfo.bidder : state.dealer;
+            if (state.bidInfo.highBid < 100) state.bidInfo.highBid = 100;
+
+            showToast(`Player ${winner === 0 ? "You" : ['W', 'N', 'E'][winner - 1]} won bid at ${state.bidInfo.highBid}`);
+
+            // Give Kitty
+            state.hands[winner] = state.hands[winner].concat(state.kitty);
+            sortHand(state.hands[winner]);
+
+            if (winner === 0) {
+                state.phase = 'KITTY';
+                discardSelection = [];
+                renderHand(); // Updates selection
+                renderKittyDisplay(true);
+                showFlex('kitty-modal');
+                updateDiscardBtn();
+            } else {
+                state.phase = 'KITTY_WAIT';
+                renderKittyDisplay(true);
+
+                const revealDuration = 5000; // minimum face-up time
+                const thinkDuration = (1 + Math.floor(Math.random() * 4)) * 1000; // extra 1-4s while bot thinks (still face-up)
+
+                delay(() => {
+                    hide('kitty-display');
+                    // Bot Discard Logic (Random 5 non-points preferred)
+                    let hand = state.hands[winner];
+                    hand.sort((a, b) => a.value - b.value); // Discard low value first
+                    let discards = hand.splice(0, 5);
+                    state.kittyPoints = discards.reduce((sum, c) => sum + c.value, 0);
+
+                    // Bot Trump Logic (Most frequent color)
+                    let counts = {};
+                    hand.forEach(c => { if (c.color !== 'ROOK') counts[c.color] = (counts[c.color] || 0) + 1; });
+                    let best = Object.keys(counts).reduce((a, b) => counts[a] > counts[b] ? a : b, 'Red');
+
+                    setTrump(best);
+                    state.currentTurn = winner;
+                    processTurn();
+                }, revealDuration + thinkDuration);
+            }
+        }
+
+        // --- Kitty Interaction ---
+        function renderKittyDisplay(showCards) {
+            const k = $('kitty-display');
+            const kc = $('kitty-cards');
+            k.style.display = 'flex';
+            kc.innerHTML = '';
+            state.kitty.forEach(c => {
+                let d = createCardDiv(c);
+                if (!showCards) d.classList.add('back');
+                else d.classList.remove('back');
+                d.style.position = 'relative';
+                d.style.width = '40px'; d.style.height = '56px';
+                d.style.fontSize = '14px';
+                kc.appendChild(d);
+            });
+        }
+
+        function toggleDiscard(idx) {
+            if (state.phase !== 'KITTY') return;
+            let i = discardSelection.indexOf(idx);
+            if (i > -1) discardSelection.splice(i, 1);
+            else if (discardSelection.length < 5) discardSelection.push(idx);
+            renderHand();
+            updateDiscardBtn();
+        }
+
+        function updateDiscardBtn() {
+            let btn = $('confirm-discard-btn');
+            btn.innerText = `CONFIRM (${discardSelection.length}/5)`;
+            btn.style.opacity = discardSelection.length === 5 ? 1 : 0.5;
+        }
+
+        function confirmDiscard() {
+            if (discardSelection.length !== 5) return;
+
+            // Process discard
+            let hand = state.hands[0];
+            let removed = [];
+            discardSelection.sort((a, b) => b - a).forEach(idx => {
+                removed.push(hand[idx]);
+                hand.splice(idx, 1);
+            });
+            state.kittyPoints = removed.reduce((sum, c) => sum + c.value, 0);
+
+            hide('kitty-modal');
+            hide('kitty-display');
+            discardSelection = [];
+            showFlex('trump-modal');
+        }
+
+        function humanSelectTrump(color) {
+            hide('trump-modal');
+            setTrump(color);
+            state.currentTurn = 0;
+            processTurn();
+        }
+
+        function setTrump(c) {
+            state.trump = c;
+            state.phase = 'PLAY';
+            updateHUD();
+            showToast(`Trump is ${c}`);
+        }
+
+        // --- Gameplay ---
+        function renderHand() {
+            const container = $('player-hand');
+            container.innerHTML = '';
+            let hand = state.hands[0];
+
+            // Determine playability
+            const leadCard = state.currentTrick.length > 0 ? state.currentTrick[0].card : null;
+            const leadColor = leadCard ? (leadCard.color === 'ROOK' ? state.trump : leadCard.color) : null;
+
+            // Calculate curve
+            const total = hand.length;
+            const center = (total - 1) / 2;
+            const angleStep = 3; // Degrees per card
+
+            hand.forEach((card, idx) => {
+                const isSelected = (idx === selectedCardIndex) || (state.phase === 'KITTY' && discardSelection.includes(idx));
+                const playable = state.phase === 'KITTY' || (state.currentTurn === 0 && isValidMove(card, hand, leadColor));
+
+                const div = createCardDiv(card);
+                div.className += ' hand-card';
+                if (isSelected) div.classList.add('selected');
+                if (!playable && state.phase === 'PLAY') div.classList.add('unplayable');
+
+                // Positioning Logic (Fan)
+                const offset = idx - center;
+                const rot = offset * angleStep;
+                const yTrans = Math.abs(offset) * 4; // Arch effect
+
+                div.style.left = `calc(50% + ${(offset * 35)}px)`; // 35px spacing
+                div.style.marginLeft = '-30px'; // Centering offset based on card width
+                div.style.bottom = `${-10 - yTrans}px`;
+                div.style.transform = `rotate(${rot}deg)`;
+                div.style.zIndex = idx;
+
+                div.onclick = (e) => {
+                    e.stopPropagation();
+                    if (state.phase === 'KITTY') {
+                        toggleDiscard(idx);
+                    } else if (state.phase === 'PLAY' && state.currentTurn === 0 && playable) {
+                        if (selectedCardIndex === idx) {
+                            // Toggle off if tapped again
+                            selectedCardIndex = -1;
+                            $('play-btn').classList.remove('visible');
+                        } else {
+                            selectedCardIndex = idx;
+                            $('play-btn').classList.add('visible');
+                        }
+                        renderHand();
+                    }
+                };
+
+                container.appendChild(div);
+            });
+        }
+
+        function humanPlayCard() {
+            if (selectedCardIndex === -1) return;
+            let card = state.hands[0][selectedCardIndex];
+            state.hands[0].splice(selectedCardIndex, 1);
+            selectedCardIndex = -1;
+            $('play-btn').classList.remove('visible');
+
+            playCardToTable(0, card);
+        }
+
+        function botPlay(pid) {
+            let hand = state.hands[pid];
+            let leadCard = state.currentTrick.length > 0 ? state.currentTrick[0].card : null;
+            let leadColor = leadCard ? (leadCard.color === 'ROOK' ? state.trump : leadCard.color) : null;
+
+            // Logic: Must follow suit
+            let candidates = hand.filter(c => {
+                if (!leadColor) return true;
+                let cColor = c.color === 'ROOK' ? state.trump : c.color;
+                return cColor === leadColor;
+            });
+            if (candidates.length === 0) candidates = hand; // No suit, play anything
+
+            // Simple AI: Play highest valid or dump lowest
+            let choice = candidates[0]; // Placeholder simple logic
+            // Real logic would go here...
+
+            let idx = hand.indexOf(choice);
+            hand.splice(idx, 1);
+            playCardToTable(pid, choice);
+        }
+
+        function playCardToTable(pid, card) {
+            state.currentTrick.push({ pid, card });
+
+            const playArea = $('play-area');
+            const el = createCardDiv(card);
+            el.classList.add('played-card');
+
+            // Start position (from player avatar approx)
+            const startPos = [
+                { t: '120%', l: '50%' }, // Self
+                { t: '50%', l: '-20%' }, // Left
+                { t: '-20%', l: '50%' }, // Top
+                { t: '50%', l: '120%' }  // Right
+            ][pid];
+
+            // End Position (Jittered center)
+            const rot = (Math.random() * 20) - 10;
+            const slots = [
+                { t: '65%', l: '50%' },
+                { t: '45%', l: '35%' },
+                { t: '25%', l: '50%' },
+                { t: '45%', l: '65%' }
+            ];
+
+            el.style.top = startPos.t;
+            el.style.left = startPos.l;
+            el.style.zIndex = 100 + state.currentTrick.length;
+
+            playArea.appendChild(el);
+
+            // Animate
+            requestAnimationFrame(() => {
+                el.style.top = slots[pid].t;
+                el.style.left = slots[pid].l;
+                el.style.transform = `translate(-50%, -50%) rotate(${rot}deg)`;
+            });
+
+            if (pid === 0) renderHand();
+            advanceTurn();
+        }
+
+        function resolveTrick() {
+            // Determine winner logic
+            let bestIdx = 0;
+            let leadObj = state.currentTrick[0];
+            let leadColor = leadObj.card.color === 'ROOK' ? state.trump : leadObj.card.color;
+            let bestPower = leadObj.card.getPower(state.trump, leadColor);
+            let points = 0;
+
+            state.currentTrick.forEach((obj, i) => {
+                points += obj.card.value;
+                if (i === 0) return;
+                let p = obj.card.getPower(state.trump, leadColor);
+                if (p > bestPower) { bestPower = p; bestIdx = i; }
+            });
+
+            let winnerPid = state.currentTrick[bestIdx].pid;
+
+            // Fly cards to winner
+            let cards = document.querySelectorAll('.played-card');
+            let dest = [
+                { t: '120%', l: '50%' }, { t: '50%', l: '-20%' },
+                { t: '-20%', l: '50%' }, { t: '50%', l: '120%' }
+            ][winnerPid];
+
+            cards.forEach(c => {
+                c.style.top = dest.t;
+                c.style.left = dest.l;
+                c.style.opacity = '0';
+                c.style.transform = 'scale(0.5)';
+            });
+
+            showBubble(winnerPid, `+${points}`);
+            if (winnerPid === 0 || winnerPid === 2) state.pointsTaken.us += points;
+            else state.pointsTaken.them += points;
+
+            updateHUD();
+
+            // Cleanup
+            setTimeout(() => {
+                $('play-area').innerHTML = '';
+                state.currentTrick = [];
+                state.currentTurn = winnerPid;
+
+                if (state.hands[0].length === 0) endRound();
+                else processTurn();
+            }, 500);
+        }
+
+        function endRound() {
+            let bidder = state.bidInfo.bidder;
+            let bid = state.bidInfo.highBid;
+            let bidTeam = (bidder === 0 || bidder === 2) ? 'us' : 'them';
+
+            state.pointsTaken[bidTeam] += state.kittyPoints; // Kitty goes to bidder's team count
+
+            let usR = state.pointsTaken.us, themR = state.pointsTaken.them;
+            if (usR === 180) usR = 360; // Sweep bonus
+            if (themR === 180) themR = 360;
+
+            let usScore = 0, themScore = 0;
+
+            if (bidTeam === 'us') {
+                usScore = (usR >= bid) ? usR : -bid;
+                themScore = themR;
+            } else {
+                themScore = (themR >= bid) ? themR : -bid;
+                usScore = usR;
+            }
+
+            state.scores.us += usScore;
+            state.scores.them += themScore;
+            updateHUD();
+
+            $('round-result-detail').innerText =
+                `Bid: ${bid} (${bidTeam.toUpperCase()})\nPoints: US ${state.pointsTaken.us} | THEM ${state.pointsTaken.them}\n\nScore Change:\nUS: ${usScore}\nTHEM: ${themScore}`;
+            showFlex('round-end-modal');
+        }
+
+        // --- UI Helpers ---
+        function createCardDiv(card) {
+            const div = document.createElement('div');
+            div.className = `card ${card.color.toLowerCase()}`;
+            if (card.color === 'ROOK') div.classList.add('rook');
+
+            const rankDisplay = card.color === 'ROOK' ? 'ROOK' : card.rank;
+            const cornerRank = card.color === 'ROOK' ? 'R' : card.rank;
+
+            div.innerHTML = `
+        <div class="card-corner tl">${cornerRank}</div>
+        <div class="card-inner">${rankDisplay}</div>
+        <div class="card-corner br">${cornerRank}</div>
+    `;
+            return div;
+        }
+
+        function updateHUD() {
+            $('score-us').innerText = state.scores.us;
+            $('score-them').innerText = state.scores.them;
+
+            let t = state.trump || '-';
+            let tPill = $('trump-pill');
+            $('trump-val').innerText = t;
+
+            // Dynamic color for trump pill
+            tPill.style.borderColor = t === 'Red' ? '#e53935' : t === 'Green' ? '#43a047' : t === 'Yellow' ? '#fdd835' : t === 'Black' ? '#555' : 'rgba(255,255,255,0.2)';
+            if (t === 'Yellow') $('trump-val').style.color = '#fdd835';
+            else $('trump-val').style.color = 'white';
+
+            let bidTxt = state.bidInfo.highBid > 0 ? state.bidInfo.highBid : '-';
+            if (state.bidInfo.bidder !== null) bidTxt += (state.bidInfo.bidder === 0 || state.bidInfo.bidder === 2) ? ' (US)' : ' (THEM)';
+            $('bid-val').innerText = bidTxt;
+        }
+
+        function updateActiveAvatar() {
+            ['p1-av', 'p2-av', 'p3-av'].forEach(id => $(id).classList.remove('active'));
+            if (state.currentTurn !== 0) {
+                let id = ['', 'p1-av', 'p2-av', 'p3-av'][state.currentTurn]; // 0=User, 1=W, 2=N, 3=E
+                if ($(id)) $(id).classList.add('active');
+            }
+        }
+
+        function showBubble(pid, text) {
+            if (pid === 0) return; // User toast instead
+            let id = ['', 'p1', 'p2', 'p3'][pid];
+            let el = $(id + '-bubble');
+            el.innerText = text;
+            el.classList.add('visible');
+            setTimeout(() => el.classList.remove('visible'), 2000);
+        }
+
+        function isValidMove(card, hand, leadColor) {
+            if (!leadColor) return true;
+            let cColor = card.color === 'ROOK' ? state.trump : card.color;
+            if (cColor === leadColor) return true;
+            let hasSuit = hand.some(c => (c.color === 'ROOK' ? state.trump : c.color) === leadColor);
+            return !hasSuit;
+        }
+
+        function sortHand(hand) {
+            const order = { 'Red': 1, 'Green': 2, 'Black': 3, 'Yellow': 4, 'ROOK': 5 };
+            hand.sort((a, b) => {
+                if (order[a.color] !== order[b.color]) return order[a.color] - order[b.color];
+                return b.rank - a.rank;
+            });
+        }
+
+        function showSettings(show) {
+            if (show) {
+                hide('landing-modal');
+                showFlex('menu-modal');
+            } else {
+                hide('landing-modal');
+                showFlex('menu-modal');
+            }
+        }
+        function closeSettings() {
+            hide('menu-modal');
+        }
+
+    </script>
+</body>
+
+</html>
