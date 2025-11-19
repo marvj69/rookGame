@@ -5,6 +5,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Rook - Mobile Edition</title>
+    <meta name="theme-color" content="#1e3c1b">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="apple-touch-icon" href="rook-icon.svg">
     <style>
         :root {
             --card-w-base: 14vw;
@@ -1344,6 +1349,14 @@
         }
         function closeSettings() {
             hide('menu-modal');
+        }
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('service-worker.js').catch(err => {
+                    console.error('Service worker registration failed:', err);
+                });
+            });
         }
 
     </script>

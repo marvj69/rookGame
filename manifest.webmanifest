@@ -1,0 +1,18 @@
+{
+  "name": "Rook - Mobile Edition",
+  "short_name": "Rook",
+  "start_url": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1e3c1b",
+  "theme_color": "#1e3c1b",
+  "description": "Play a full round of Rook on mobile or desktop, even when you're offline.",
+  "icons": [
+    {
+      "src": "rook-icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
