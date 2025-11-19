@@ -511,6 +511,16 @@
             backdrop-filter: none;
         }
 
+        /* Kitty prompt should not block taps on the hand */
+        #kitty-modal {
+            background: none;
+            pointer-events: none;
+        }
+
+        #kitty-modal .modal-card {
+            pointer-events: auto;
+        }
+
         .modal-card {
             background: linear-gradient(160deg, #2a2a2a, #1a1a1a);
             width: 90%;
