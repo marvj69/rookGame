@@ -351,11 +351,12 @@
         .hand-container {
             position: relative;
             width: 100%;
-            max-width: 600px;
+            max-width: none;
             height: 100%;
             display: flex;
             justify-content: center;
             pointer-events: none;
+            padding: 0 12px;
         }
 
         .hand-card {
@@ -1078,6 +1079,12 @@
             const center = (total - 1) / 2;
             const angleStep = 3; // Degrees per card
 
+            // Responsive spacing so the full hand stays on-screen
+            const containerWidth = container.clientWidth || window.innerWidth;
+            const cardWidth = Math.min(Math.max(window.innerWidth * 0.14, 50), 80);
+            const halfCard = cardWidth / 2;
+            const spacing = Math.min(35, Math.max(14, (containerWidth - cardWidth) / Math.max(total - 1, 1)));
+
             hand.forEach((card, idx) => {
                 const isSelected = (idx === selectedCardIndex) || (state.phase === 'KITTY' && discardSelection.includes(idx));
                 const playable = state.phase === 'KITTY' || (state.currentTurn === 0 && isValidMove(card, hand, leadColor));
@@ -1092,8 +1099,8 @@
                 const rot = offset * angleStep;
                 const yTrans = Math.abs(offset) * 4; // Arch effect
 
-                div.style.left = `calc(50% + ${(offset * 35)}px)`; // 35px spacing
-                div.style.marginLeft = '-30px'; // Centering offset based on card width
+                div.style.left = `calc(50% + ${(offset * spacing)}px)`;
+                div.style.marginLeft = `-${halfCard}px`;
                 div.style.bottom = `${-10 - yTrans}px`;
                 div.style.transform = `rotate(${rot}deg)`;
                 div.style.zIndex = idx;
