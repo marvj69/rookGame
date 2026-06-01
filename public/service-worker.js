@@ -1,10 +1,10 @@
-const CACHE_NAME = "rook-game-cache-v1";
+const CACHE_NAME = "rook-game-cache-v2";
 const ASSETS_TO_CACHE = [
-  "./",
-  "index.html",
-  "manifest.webmanifest",
-  "rook-icon.svg",
-  "service-worker.js"
+  "/",
+  "/index.html",
+  "/manifest.webmanifest",
+  "/rook-icon.svg",
+  "/service-worker.js"
 ];
 
 self.addEventListener("install", event => {
@@ -49,7 +49,7 @@ self.addEventListener("fetch", event => {
           caches.open(CACHE_NAME).then(cache => cache.put(request, clone));
           return networkResponse;
         })
-        .catch(() => caches.match("index.html"));
+        .catch(() => caches.match("/index.html"));
     })
   );
 });

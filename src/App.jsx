@@ -1,0 +1,907 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  BID_START,
+  COLORS,
+  DISCARD_COUNT,
+  cloneGameState,
+  completeRoundScore,
+  createInitialGame,
+  dealRound,
+  getCardPower,
+  getLeadColor,
+  isValidMove,
+  playerName,
+  sortHand,
+  teamForPlayer,
+} from "./game.js";
+
+const BID_MAX = 150;
+
+const PLAY_SLOTS = [
+  { top: "65%", left: "50%" },
+  { top: "45%", left: "35%" },
+  { top: "25%", left: "50%" },
+  { top: "45%", left: "65%" },
+];
+
+const PLAYER_ORIGINS = [
+  { top: "120%", left: "50%" },
+  { top: "50%", left: "-20%" },
+  { top: "-20%", left: "50%" },
+  { top: "50%", left: "120%" },
+];
+
+function prepareRoundState(state) {
+  const { kitty, hands } = dealRound();
+
+  state.kitty = kitty;
+  state.hands = hands;
+  state.kittyPoints = 0;
+  state.trump = null;
+  state.pointsTaken = { us: 0, them: 0 };
+  state.currentTrick = [];
+  state.tricks = [];
+  state.collectingWinner = null;
+  state.bidInfo = {
+    active: true,
+    highBid: BID_START,
+    bidder: null,
+    passed: [false, false, false, false],
+  };
+  state.dealer = (state.dealer + 1) % 4;
+  state.currentTurn = (state.dealer + 1) % 4;
+  state.phase = "BID";
+  state.selectedCardIndex = -1;
+  state.discardSelection = [];
+  state.showKittyDisplay = false;
+  state.kittyFaceUp = true;
+  state.menuOpen = false;
+  state.bubbles = { 1: "", 2: "", 3: "" };
+  state.roundResult = null;
+}
+
+function useElementWidth(ref) {
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    if (!ref.current) return undefined;
+
+    const updateWidth = () => {
+      setWidth(ref.current?.clientWidth || window.innerWidth);
+    };
+
+    updateWidth();
+    window.addEventListener("resize", updateWidth);
+
+    let observer = null;
+    if ("ResizeObserver" in window) {
+      observer = new ResizeObserver(updateWidth);
+      observer.observe(ref.current);
+    }
+
+    return () => {
+      window.removeEventListener("resize", updateWidth);
+      observer?.disconnect();
+    };
+  }, [ref]);
+
+  return width;
+}
+
+function cardColorClass(card) {
+  return card.color.toLowerCase();
+}
+
+function getBidOptions(highBid) {
+  const minBid = Math.max(100, highBid + 5);
+  const options = [];
+
+  for (let bid = minBid; bid <= BID_MAX; bid += 5) {
+    options.push(bid);
+  }
+
+  return options;
+}
+
+export default function App() {
+  const gameRef = useRef(createInitialGame());
+  const activeTimeoutsRef = useRef([]);
+  const [game, setGame] = useState(() => cloneGameState(gameRef.current));
+
+  function commitGame() {
+    setGame(cloneGameState(gameRef.current));
+  }
+
+  function mutateGame(mutator) {
+    mutator(gameRef.current);
+    commitGame();
+  }
+
+  function clearAllTimeouts() {
+    activeTimeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
+    activeTimeoutsRef.current = [];
+  }
+
+  function delay(fn, ms) {
+    const timeoutId = window.setTimeout(() => {
+      activeTimeoutsRef.current = activeTimeoutsRef.current.filter((id) => id !== timeoutId);
+      fn();
+    }, ms);
+
+    activeTimeoutsRef.current.push(timeoutId);
+    return timeoutId;
+  }
+
+  function showToast(message) {
+    mutateGame((state) => {
+      state.toast = { message, visible: true };
+    });
+
+    delay(() => {
+      mutateGame((state) => {
+        if (state.toast.message === message) {
+          state.toast = { ...state.toast, visible: false };
+        }
+      });
+    }, 2000);
+  }
+
+  function showBubble(playerId, text) {
+    if (playerId === 0) return;
+
+    mutateGame((state) => {
+      state.bubbles = { ...state.bubbles, [playerId]: text };
+    });
+
+    delay(() => {
+      mutateGame((state) => {
+        if (state.bubbles[playerId] === text) {
+          state.bubbles = { ...state.bubbles, [playerId]: "" };
+        }
+      });
+    }, 2000);
+  }
+
+  function startGame() {
+    clearAllTimeouts();
+
+    mutateGame((state) => {
+      const settings = { ...state.settings };
+      Object.assign(state, createInitialGame());
+      state.settings = settings;
+      state.scores = { us: 0, them: 0 };
+      state.dealer = Math.floor(Math.random() * 4);
+      prepareRoundState(state);
+    });
+
+    showToast("Bidding Starts");
+    processTurn();
+  }
+
+  function startRound() {
+    clearAllTimeouts();
+
+    mutateGame((state) => {
+      prepareRoundState(state);
+    });
+
+    showToast("Bidding Starts");
+    processTurn();
+  }
+
+  function processTurn() {
+    const state = gameRef.current;
+
+    if (state.phase === "BID") {
+      const activeBidderCount = state.bidInfo.passed.filter((hasPassed) => !hasPassed).length;
+
+      if (activeBidderCount <= 1) {
+        endBidding();
+        return;
+      }
+
+      if (state.bidInfo.passed[state.currentTurn]) {
+        advanceTurn();
+        return;
+      }
+
+      if (state.currentTurn !== 0) {
+        const botId = state.currentTurn;
+        delay(() => botBid(botId), 800);
+      }
+
+      return;
+    }
+
+    if (state.phase === "PLAY") {
+      if (state.currentTrick.length === 4) {
+        delay(resolveTrick, 1500);
+        return;
+      }
+
+      if (state.currentTurn === 0) {
+        mutateGame((nextState) => {
+          const hand = nextState.hands[0];
+          const selectedCard = hand[nextState.selectedCardIndex];
+          const leadColor = getLeadColor(nextState.currentTrick, nextState.trump);
+
+          if (selectedCard && !isValidMove(selectedCard, hand, leadColor, nextState.trump)) {
+            nextState.selectedCardIndex = -1;
+          }
+        });
+      } else {
+        const botId = state.currentTurn;
+        delay(() => botPlay(botId), 800);
+      }
+    }
+  }
+
+  function advanceTurn() {
+    mutateGame((state) => {
+      state.currentTurn = (state.currentTurn + 1) % 4;
+    });
+
+    processTurn();
+  }
+
+  function humanPass() {
+    submitBid(0, 0);
+  }
+
+  function botBid(playerId) {
+    const state = gameRef.current;
+    if (state.phase !== "BID" || state.currentTurn !== playerId) return;
+
+    const currentBid = state.bidInfo.highBid;
+    const shouldBid = currentBid < 120 && Math.random() > 0.3;
+    submitBid(playerId, shouldBid ? currentBid + 5 : 0);
+  }
+
+  function submitBid(playerId, amount) {
+    mutateGame((state) => {
+      if (amount > 0) {
+        state.bidInfo.highBid = amount;
+        state.bidInfo.bidder = playerId;
+        state.bidInfo.passed[playerId] = false;
+      } else {
+        state.bidInfo.passed[playerId] = true;
+      }
+    });
+
+    showBubble(playerId, amount > 0 ? amount.toString() : "Pass");
+    advanceTurn();
+  }
+
+  function endBidding() {
+    const state = gameRef.current;
+    const winner = state.bidInfo.bidder ?? state.dealer;
+    const finalBid = Math.max(100, state.bidInfo.highBid);
+
+    mutateGame((nextState) => {
+      nextState.bidInfo.highBid = finalBid;
+      nextState.bidInfo.bidder = winner;
+      nextState.hands[winner] = sortHand([...nextState.hands[winner], ...nextState.kitty]);
+      nextState.showKittyDisplay = true;
+      nextState.kittyFaceUp = true;
+      nextState.selectedCardIndex = -1;
+      nextState.discardSelection = [];
+      nextState.phase = winner === 0 ? "KITTY" : "KITTY_WAIT";
+    });
+
+    showToast(`${playerName(winner)} won bid at ${finalBid}`);
+
+    if (winner === 0) return;
+
+    const revealDuration = 5000;
+    const thinkDuration = (1 + Math.floor(Math.random() * 4)) * 1000;
+
+    delay(() => {
+      const latest = gameRef.current;
+      if (latest.phase !== "KITTY_WAIT" || latest.bidInfo.bidder !== winner) return;
+
+      let chosenTrump = "Red";
+
+      mutateGame((nextState) => {
+        const handByLowValue = [...nextState.hands[winner]].sort((a, b) => a.value - b.value);
+        const discards = handByLowValue.splice(0, DISCARD_COUNT);
+        const colorCounts = {};
+
+        handByLowValue.forEach((card) => {
+          if (card.color !== "ROOK") {
+            colorCounts[card.color] = (colorCounts[card.color] || 0) + 1;
+          }
+        });
+
+        chosenTrump = COLORS.reduce((bestColor, color) => {
+          return (colorCounts[color] || 0) > (colorCounts[bestColor] || 0) ? color : bestColor;
+        }, "Red");
+
+        nextState.hands[winner] = sortHand(handByLowValue);
+        nextState.kittyPoints = discards.reduce((sum, card) => sum + card.value, 0);
+        nextState.showKittyDisplay = false;
+        nextState.trump = chosenTrump;
+        nextState.phase = "PLAY";
+        nextState.currentTurn = winner;
+      });
+
+      showToast(`Trump is ${chosenTrump}`);
+      processTurn();
+    }, revealDuration + thinkDuration);
+  }
+
+  function toggleDiscard(index) {
+    mutateGame((state) => {
+      if (state.phase !== "KITTY") return;
+
+      const existingIndex = state.discardSelection.indexOf(index);
+      if (existingIndex >= 0) {
+        state.discardSelection.splice(existingIndex, 1);
+      } else if (state.discardSelection.length < DISCARD_COUNT) {
+        state.discardSelection.push(index);
+      }
+    });
+  }
+
+  function confirmDiscard() {
+    const state = gameRef.current;
+    if (state.phase !== "KITTY" || state.discardSelection.length !== DISCARD_COUNT) return;
+
+    mutateGame((nextState) => {
+      const hand = [...nextState.hands[0]];
+      const removed = [];
+
+      [...nextState.discardSelection]
+        .sort((a, b) => b - a)
+        .forEach((index) => {
+          removed.push(hand[index]);
+          hand.splice(index, 1);
+        });
+
+      nextState.hands[0] = sortHand(hand);
+      nextState.kittyPoints = removed.reduce((sum, card) => sum + card.value, 0);
+      nextState.discardSelection = [];
+      nextState.selectedCardIndex = -1;
+      nextState.showKittyDisplay = false;
+      nextState.phase = "TRUMP";
+    });
+  }
+
+  function humanSelectTrump(color) {
+    mutateGame((state) => {
+      if (state.phase !== "TRUMP") return;
+
+      state.trump = color;
+      state.phase = "PLAY";
+      state.currentTurn = 0;
+    });
+
+    showToast(`Trump is ${color}`);
+    processTurn();
+  }
+
+  function selectHandCard(index, playable) {
+    const state = gameRef.current;
+
+    if (state.phase === "KITTY") {
+      toggleDiscard(index);
+      return;
+    }
+
+    if (state.phase !== "PLAY" || state.currentTurn !== 0 || !playable) return;
+
+    mutateGame((nextState) => {
+      nextState.selectedCardIndex = nextState.selectedCardIndex === index ? -1 : index;
+    });
+  }
+
+  function humanPlayCard() {
+    const state = gameRef.current;
+    if (state.phase !== "PLAY" || state.currentTurn !== 0 || state.selectedCardIndex < 0) return;
+
+    const card = state.hands[0][state.selectedCardIndex];
+    if (!card) return;
+
+    mutateGame((nextState) => {
+      nextState.hands[0].splice(nextState.selectedCardIndex, 1);
+      nextState.selectedCardIndex = -1;
+      nextState.currentTrick.push({
+        pid: 0,
+        card,
+        rotation: Math.random() * 20 - 10,
+      });
+    });
+
+    advanceTurn();
+  }
+
+  function botPlay(playerId) {
+    const state = gameRef.current;
+    if (state.phase !== "PLAY" || state.currentTurn !== playerId) return;
+
+    const hand = state.hands[playerId];
+    const leadColor = getLeadColor(state.currentTrick, state.trump);
+    let candidates = hand.filter((card) => isValidMove(card, hand, leadColor, state.trump));
+
+    if (candidates.length === 0) {
+      candidates = hand;
+    }
+
+    const choice = candidates[0];
+    if (!choice) return;
+
+    mutateGame((nextState) => {
+      const cardIndex = nextState.hands[playerId].findIndex((card) => card.id === choice.id);
+      if (cardIndex >= 0) {
+        nextState.hands[playerId].splice(cardIndex, 1);
+      }
+
+      nextState.currentTrick.push({
+        pid: playerId,
+        card: choice,
+        rotation: Math.random() * 20 - 10,
+      });
+    });
+
+    advanceTurn();
+  }
+
+  function resolveTrick() {
+    const state = gameRef.current;
+    if (state.phase !== "PLAY" || state.currentTrick.length !== 4) return;
+
+    const leadColor = getLeadColor(state.currentTrick, state.trump);
+    let bestIndex = 0;
+    let bestPower = getCardPower(state.currentTrick[0].card, state.trump, leadColor);
+    let points = 0;
+
+    state.currentTrick.forEach((play, index) => {
+      points += play.card.value;
+
+      if (index === 0) return;
+
+      const power = getCardPower(play.card, state.trump, leadColor);
+      if (power > bestPower) {
+        bestPower = power;
+        bestIndex = index;
+      }
+    });
+
+    const winner = state.currentTrick[bestIndex].pid;
+    const winningTeam = teamForPlayer(winner);
+
+    mutateGame((nextState) => {
+      nextState.collectingWinner = winner;
+      nextState.pointsTaken[winningTeam] += points;
+    });
+
+    showBubble(winner, `+${points}`);
+
+    delay(() => {
+      let shouldContinue = false;
+
+      mutateGame((nextState) => {
+        nextState.currentTrick = [];
+        nextState.collectingWinner = null;
+        nextState.currentTurn = winner;
+
+        if (nextState.hands[0].length === 0) {
+          finishRound(nextState);
+        } else {
+          shouldContinue = true;
+        }
+      });
+
+      if (shouldContinue) {
+        processTurn();
+      }
+    }, 500);
+  }
+
+  function finishRound(state) {
+    const roundScore = completeRoundScore(state);
+
+    state.pointsTaken = roundScore.pointsTaken;
+    state.scores.us += roundScore.scoreChange.us;
+    state.scores.them += roundScore.scoreChange.them;
+    state.phase = "ROUND_END";
+    state.roundResult = {
+      title: "Round Over",
+      detail: `Bid: ${roundScore.bid} (${roundScore.bidTeam.toUpperCase()})\nPoints: US ${roundScore.pointsTaken.us} | THEM ${roundScore.pointsTaken.them}\n\nScore Change:\nUS: ${roundScore.scoreChange.us}\nTHEM: ${roundScore.scoreChange.them}`,
+    };
+  }
+
+  function openSettings() {
+    mutateGame((state) => {
+      state.menuOpen = true;
+    });
+  }
+
+  function closeSettings() {
+    mutateGame((state) => {
+      state.menuOpen = false;
+    });
+  }
+
+  function toggleMustWinByBid(checked) {
+    mutateGame((state) => {
+      state.settings.mustWinByBid = checked;
+    });
+  }
+
+  useEffect(() => {
+    return () => {
+      clearAllTimeouts();
+    };
+  }, []);
+
+  const appClassName = game.phase === "BID" && game.currentTurn === 0 ? "rook-app bid-focus" : "rook-app";
+
+  return (
+    <main className={appClassName}>
+      <Hud game={game} onOpenSettings={openSettings} />
+
+      <section id="game-table" aria-label="Rook game table">
+        <Avatar playerId={2} position="top-player" active={game.currentTurn === 2} bubble={game.bubbles[2]} />
+        <Avatar playerId={1} position="left-player" active={game.currentTurn === 1} bubble={game.bubbles[1]} />
+        <Avatar playerId={3} position="right-player" active={game.currentTurn === 3} bubble={game.bubbles[3]} />
+
+        <PlayedCards game={game} />
+
+        {game.showKittyDisplay && <KittyDisplay kitty={game.kitty} faceUp={game.kittyFaceUp} />}
+
+        <button
+          id="play-btn"
+          className={game.phase === "PLAY" && game.currentTurn === 0 && game.selectedCardIndex !== -1 ? "visible" : ""}
+          type="button"
+          onClick={humanPlayCard}
+        >
+          PLAY CARD
+        </button>
+
+        <Hand game={game} onCardClick={selectHandCard} />
+      </section>
+
+      <Toast toast={game.toast} />
+
+      {game.phase === "MENU" && !game.menuOpen && <LandingModal onStartGame={startGame} onOpenSettings={openSettings} />}
+      {game.phase === "BID" && game.currentTurn === 0 && (
+        <BidModal game={game} onBid={(amount) => submitBid(0, amount)} onPass={humanPass} />
+      )}
+      {game.phase === "TRUMP" && <TrumpModal onSelectTrump={humanSelectTrump} />}
+      {game.phase === "KITTY" && <KittyModal game={game} onConfirmDiscard={confirmDiscard} />}
+      {game.phase === "ROUND_END" && game.roundResult && (
+        <RoundEndModal result={game.roundResult} onStartRound={startRound} />
+      )}
+      {game.menuOpen && (
+        <SettingsModal
+          game={game}
+          onClose={closeSettings}
+          onRestart={startGame}
+          onToggleMustWinByBid={toggleMustWinByBid}
+        />
+      )}
+    </main>
+  );
+}
+
+function Hud({ game, onOpenSettings }) {
+  const trump = game.trump || "-";
+  const bidTeam = game.bidInfo.bidder !== null ? (teamForPlayer(game.bidInfo.bidder) === "us" ? " (US)" : " (THEM)") : "";
+  const bidText = game.bidInfo.highBid > 0 ? `${game.bidInfo.highBid}${bidTeam}` : "-";
+
+  const trumpPillStyle = {
+    borderColor:
+      trump === "Red"
+        ? "#e53935"
+        : trump === "Green"
+          ? "#43a047"
+          : trump === "Yellow"
+            ? "#fdd835"
+            : trump === "Black"
+              ? "#555"
+              : "rgba(255, 255, 255, 0.2)",
+  };
+
+  return (
+    <header id="hud">
+      <div className="hud-group">
+        <div className="pill" id="trump-pill" style={trumpPillStyle}>
+          Trump:{" "}
+          <span className="val" id="trump-val" style={{ color: trump === "Yellow" ? "#fdd835" : "white" }}>
+            {trump}
+          </span>
+        </div>
+        <div className="pill">
+          Bid:{" "}
+          <span className="val" id="bid-val">
+            {bidText}
+          </span>
+        </div>
+      </div>
+
+      <div className="hud-group score-group">
+        <div className="pill">
+          US: <span className="val">{game.scores.us}</span>
+        </div>
+        <div className="pill">
+          THEM: <span className="val">{game.scores.them}</span>
+        </div>
+      </div>
+
+      <button className="menu-btn" type="button" aria-label="Open settings" onClick={onOpenSettings}>
+        <span className="menu-icon" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </span>
+      </button>
+    </header>
+  );
+}
+
+function Avatar({ playerId, position, active, bubble }) {
+  return (
+    <div className={`avatar-container ${position}`}>
+      <div className={active ? "avatar active" : "avatar"}>{playerName(playerId)}</div>
+      <div className={bubble ? "bubble visible" : "bubble"}>{bubble}</div>
+    </div>
+  );
+}
+
+function PlayedCards({ game }) {
+  return (
+    <div id="play-area">
+      {game.currentTrick.map((play, index) => {
+        const isCollecting = game.collectingWinner !== null;
+        const position = isCollecting ? PLAYER_ORIGINS[game.collectingWinner] : PLAY_SLOTS[play.pid];
+        const transform = isCollecting
+          ? "translate(-50%, -50%) scale(0.5)"
+          : `translate(-50%, -50%) rotate(${play.rotation}deg)`;
+
+        return (
+          <CardView
+            key={`${play.card.id}-${index}`}
+            card={play.card}
+            className="played-card"
+            style={{
+              top: position.top,
+              left: position.left,
+              zIndex: 100 + index,
+              opacity: isCollecting ? 0 : 1,
+              transform,
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function KittyDisplay({ kitty, faceUp }) {
+  return (
+    <aside id="kitty-display" aria-label="Kitty cards">
+      <div className="kitty-label">Kitty</div>
+      <div className="kitty-row">
+        {kitty.map((card) => (
+          <CardView
+            key={card.id}
+            card={card}
+            back={!faceUp}
+            style={{
+              position: "relative",
+              width: "40px",
+              height: "56px",
+              fontSize: "14px",
+            }}
+          />
+        ))}
+      </div>
+    </aside>
+  );
+}
+
+function Hand({ game, onCardClick }) {
+  const containerRef = useRef(null);
+  const containerWidth = useElementWidth(containerRef);
+  const hand = game.hands[0];
+  const leadColor = useMemo(() => getLeadColor(game.currentTrick, game.trump), [game.currentTrick, game.trump]);
+  const viewportWidth = typeof window === "undefined" ? 390 : window.innerWidth;
+  const cardWidth = Math.min(Math.max(viewportWidth * 0.14, 50), 80);
+  const halfCard = cardWidth / 2;
+  const total = hand.length;
+  const center = (total - 1) / 2;
+  const spacing = Math.min(35, Math.max(14, ((containerWidth || viewportWidth) - cardWidth) / Math.max(total - 1, 1)));
+
+  return (
+    <div className="bottom-area">
+      <div className="hand-container" id="player-hand" ref={containerRef}>
+        {hand.map((card, index) => {
+          const isSelected = game.selectedCardIndex === index || (game.phase === "KITTY" && game.discardSelection.includes(index));
+          const playable =
+            game.phase === "KITTY" ||
+            (game.phase === "PLAY" && game.currentTurn === 0 && isValidMove(card, hand, leadColor, game.trump));
+          const offset = index - center;
+          const rotation = offset * 3;
+          const yTranslate = Math.abs(offset) * 4;
+
+          return (
+            <CardView
+              key={card.id}
+              card={card}
+              className={`hand-card${isSelected ? " selected" : ""}${!playable && game.phase === "PLAY" ? " unplayable" : ""}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onCardClick(index, playable);
+              }}
+              style={{
+                left: `calc(50% + ${offset * spacing}px)`,
+                marginLeft: `-${halfCard}px`,
+                bottom: `${-10 - yTranslate}px`,
+                transform: `rotate(${rotation}deg)`,
+                zIndex: index,
+              }}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CardView({ card, className = "", style, onClick, back = false }) {
+  const rankDisplay = card.color === "ROOK" ? "ROOK" : card.rank;
+  const cornerRank = card.color === "ROOK" ? "R" : card.rank;
+  const classes = ["card", cardColorClass(card), card.color === "ROOK" ? "rook" : "", back ? "back" : "", className]
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    <button className={classes} style={style} type="button" onClick={onClick} aria-label={`${rankDisplay} ${card.color}`}>
+      <span className="card-corner tl">{cornerRank}</span>
+      <span className="card-inner">{rankDisplay}</span>
+      <span className="card-corner br">{cornerRank}</span>
+    </button>
+  );
+}
+
+function Toast({ toast }) {
+  return <div className={toast.visible ? "toast show" : "toast"}>{toast.message || "Message"}</div>;
+}
+
+function Modal({ id, children, className = "" }) {
+  return (
+    <div id={id} className={`modal ${className}`}>
+      {children}
+    </div>
+  );
+}
+
+function LandingModal({ onStartGame, onOpenSettings }) {
+  return (
+    <Modal id="landing-modal">
+      <div className="modal-card">
+        <h1 className="modal-title game-title">ROOK</h1>
+        <p className="modal-subtitle">Mobile Edition</p>
+        <button className="btn-primary" type="button" onClick={onStartGame}>
+          START NEW GAME
+        </button>
+        <button className="btn-secondary" type="button" onClick={onOpenSettings}>
+          OPTIONS
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function BidModal({ game, onBid, onPass }) {
+  const bidOptions = getBidOptions(game.bidInfo.highBid);
+
+  return (
+    <Modal id="bid-modal">
+      <div className="modal-card">
+        <h2 className="modal-title">Your Bid</h2>
+        <p className="modal-subtitle">
+          Current High: <span className="modal-emphasis">{game.bidInfo.highBid}</span>
+        </p>
+        <div className="grid-options">
+          {bidOptions.map((bid) => (
+            <button className="btn-opt" type="button" key={bid} onClick={() => onBid(bid)}>
+              {bid}
+            </button>
+          ))}
+        </div>
+        <div className="button-row">
+          <button className="btn-secondary btn-pass" type="button" onClick={onPass}>
+            PASS
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function TrumpModal({ onSelectTrump }) {
+  return (
+    <Modal id="trump-modal">
+      <div className="modal-card">
+        <h2 className="modal-title">Choose Trump</h2>
+        <div className="color-options">
+          <button className="btn-opt btn-red" type="button" onClick={() => onSelectTrump("Red")}>
+            RED
+          </button>
+          <button className="btn-opt btn-green" type="button" onClick={() => onSelectTrump("Green")}>
+            GREEN
+          </button>
+          <button className="btn-opt btn-black" type="button" onClick={() => onSelectTrump("Black")}>
+            BLACK
+          </button>
+          <button className="btn-opt btn-yellow" type="button" onClick={() => onSelectTrump("Yellow")}>
+            YELLOW
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function KittyModal({ game, onConfirmDiscard }) {
+  const selectedCount = game.discardSelection.length;
+
+  return (
+    <Modal id="kitty-modal">
+      <div className="modal-card kitty-card">
+        <h2 className="modal-title">The Kitty</h2>
+        <p className="modal-subtitle">Tap 5 cards in your hand to discard.</p>
+        <button
+          className="btn-primary"
+          id="confirm-discard-btn"
+          type="button"
+          disabled={selectedCount !== DISCARD_COUNT}
+          onClick={onConfirmDiscard}
+        >
+          CONFIRM ({selectedCount}/5)
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function RoundEndModal({ result, onStartRound }) {
+  return (
+    <Modal id="round-end-modal">
+      <div className="modal-card">
+        <h2 className="modal-title">{result.title}</h2>
+        <p className="modal-subtitle round-detail">{result.detail}</p>
+        <button className="btn-primary" type="button" onClick={onStartRound}>
+          NEXT ROUND
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function SettingsModal({ game, onClose, onRestart, onToggleMustWinByBid }) {
+  return (
+    <Modal id="menu-modal">
+      <div className="modal-card">
+        <h2 className="modal-title">Settings</h2>
+        <div className="settings-list">
+          <label className="settings-row">
+            <span>Must Win Bid</span>
+            <input
+              type="checkbox"
+              checked={game.settings.mustWinByBid}
+              onChange={(event) => onToggleMustWinByBid(event.target.checked)}
+            />
+          </label>
+        </div>
+        <button className="btn-primary" type="button" onClick={onRestart}>
+          RESTART GAME
+        </button>
+        <button className="btn-secondary" type="button" onClick={onClose}>
+          CLOSE
+        </button>
+      </div>
+    </Modal>
+  );
+}
