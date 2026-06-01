@@ -16,6 +16,9 @@ import {
 } from "./game.js";
 
 const BID_MAX = 150;
+const TARGET_SCORE = 500;
+const COMPLETED_GAMES_STORAGE_KEY = "rook.completedGames";
+const MAX_COMPLETED_GAMES = 20;
 
 const PLAY_SLOTS = [
   { top: "65%", left: "50%" },
@@ -103,10 +106,47 @@ function getBidOptions(highBid) {
   return options;
 }
 
+function loadCompletedGames() {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const savedGames = window.localStorage.getItem(COMPLETED_GAMES_STORAGE_KEY);
+    const parsedGames = savedGames ? JSON.parse(savedGames) : [];
+    return Array.isArray(parsedGames) ? parsedGames : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCompletedGames(completedGames) {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.localStorage.setItem(COMPLETED_GAMES_STORAGE_KEY, JSON.stringify(completedGames));
+  } catch {
+    // Local storage can fail in private browsing or restricted embeds.
+  }
+}
+
+function formatCompletedDate(value) {
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(value));
+  } catch {
+    return "Recently";
+  }
+}
+
 export default function App() {
   const gameRef = useRef(createInitialGame());
   const activeTimeoutsRef = useRef([]);
   const [game, setGame] = useState(() => cloneGameState(gameRef.current));
+  const [menuView, setMenuView] = useState("home");
+  const [completedGames, setCompletedGames] = useState(loadCompletedGames);
 
   function commitGame() {
     setGame(cloneGameState(gameRef.current));
@@ -162,8 +202,22 @@ export default function App() {
     }, 2000);
   }
 
+  function recordCompletedGame(completedGame) {
+    setCompletedGames((currentGames) => {
+      const nextGames = [completedGame, ...currentGames].slice(0, MAX_COMPLETED_GAMES);
+      saveCompletedGames(nextGames);
+      return nextGames;
+    });
+  }
+
+  function clearCompletedGames() {
+    saveCompletedGames([]);
+    setCompletedGames([]);
+  }
+
   function startGame() {
     clearAllTimeouts();
+    setMenuView("home");
 
     mutateGame((state) => {
       const settings = { ...state.settings };
@@ -176,6 +230,17 @@ export default function App() {
 
     showToast("Bidding Starts");
     processTurn();
+  }
+
+  function goToMainMenu() {
+    clearAllTimeouts();
+    setMenuView("home");
+
+    mutateGame((state) => {
+      const settings = { ...state.settings };
+      Object.assign(state, createInitialGame());
+      state.settings = settings;
+    });
   }
 
   function startRound() {
@@ -478,6 +543,7 @@ export default function App() {
 
     delay(() => {
       let shouldContinue = false;
+      let completedGame = null;
 
       mutateGame((nextState) => {
         nextState.currentTrick = [];
@@ -485,11 +551,15 @@ export default function App() {
         nextState.currentTurn = winner;
 
         if (nextState.hands[0].length === 0) {
-          finishRound(nextState);
+          completedGame = finishRound(nextState);
         } else {
           shouldContinue = true;
         }
       });
+
+      if (completedGame) {
+        recordCompletedGame(completedGame);
+      }
 
       if (shouldContinue) {
         processTurn();
@@ -503,11 +573,39 @@ export default function App() {
     state.pointsTaken = roundScore.pointsTaken;
     state.scores.us += roundScore.scoreChange.us;
     state.scores.them += roundScore.scoreChange.them;
+    state.roundsCompleted += 1;
+
+    const leadingTeam = state.scores.us >= state.scores.them ? "us" : "them";
+    const reachedTarget = state.scores[leadingTeam] >= TARGET_SCORE;
+    const canWin = !state.settings.mustWinByBid || roundScore.bidTeam === leadingTeam;
+    const winnerTeam = reachedTarget && canWin ? leadingTeam : null;
+    const scoreSummary = `Bid: ${roundScore.bid} (${roundScore.bidTeam.toUpperCase()})\nPoints: US ${roundScore.pointsTaken.us} | THEM ${roundScore.pointsTaken.them}\n\nScore Change:\nUS: ${roundScore.scoreChange.us}\nTHEM: ${roundScore.scoreChange.them}`;
+
+    if (winnerTeam) {
+      const completedGame = {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        finishedAt: new Date().toISOString(),
+        winner: winnerTeam,
+        scores: { ...state.scores },
+        rounds: state.roundsCompleted,
+      };
+
+      state.phase = "GAME_END";
+      state.roundResult = {
+        title: `${winnerTeam.toUpperCase()} Wins`,
+        detail: `${scoreSummary}\n\nFinal Score:\nUS: ${state.scores.us}\nTHEM: ${state.scores.them}`,
+      };
+
+      return completedGame;
+    }
+
     state.phase = "ROUND_END";
     state.roundResult = {
       title: "Round Over",
-      detail: `Bid: ${roundScore.bid} (${roundScore.bidTeam.toUpperCase()})\nPoints: US ${roundScore.pointsTaken.us} | THEM ${roundScore.pointsTaken.them}\n\nScore Change:\nUS: ${roundScore.scoreChange.us}\nTHEM: ${roundScore.scoreChange.them}`,
+      detail: scoreSummary,
     };
+
+    return null;
   }
 
   function openSettings() {
@@ -536,6 +634,23 @@ export default function App() {
 
   const appClassName = game.phase === "BID" && game.currentTurn === 0 ? "rook-app bid-focus" : "rook-app";
 
+  if (game.phase === "MENU") {
+    return (
+      <main className="rook-app menu-mode">
+        <MainMenuScreen
+          completedGames={completedGames}
+          menuView={menuView}
+          settings={game.settings}
+          targetScore={TARGET_SCORE}
+          onClearCompletedGames={clearCompletedGames}
+          onSelectView={setMenuView}
+          onStartGame={startGame}
+          onToggleMustWinByBid={toggleMustWinByBid}
+        />
+      </main>
+    );
+  }
+
   return (
     <main className={appClassName}>
       <Hud game={game} onOpenSettings={openSettings} />
@@ -563,14 +678,28 @@ export default function App() {
 
       <Toast toast={game.toast} />
 
-      {game.phase === "MENU" && !game.menuOpen && <LandingModal onStartGame={startGame} onOpenSettings={openSettings} />}
       {game.phase === "BID" && game.currentTurn === 0 && (
         <BidModal game={game} onBid={(amount) => submitBid(0, amount)} onPass={humanPass} />
       )}
       {game.phase === "TRUMP" && <TrumpModal onSelectTrump={humanSelectTrump} />}
       {game.phase === "KITTY" && <KittyModal game={game} onConfirmDiscard={confirmDiscard} />}
       {game.phase === "ROUND_END" && game.roundResult && (
-        <RoundEndModal result={game.roundResult} onStartRound={startRound} />
+        <RoundEndModal
+          result={game.roundResult}
+          primaryLabel="NEXT ROUND"
+          secondaryLabel="MAIN MENU"
+          onPrimary={startRound}
+          onSecondary={goToMainMenu}
+        />
+      )}
+      {game.phase === "GAME_END" && game.roundResult && (
+        <RoundEndModal
+          result={game.roundResult}
+          primaryLabel="START NEW GAME"
+          secondaryLabel="MAIN MENU"
+          onPrimary={startGame}
+          onSecondary={goToMainMenu}
+        />
       )}
       {game.menuOpen && (
         <SettingsModal
@@ -776,20 +905,199 @@ function Modal({ id, children, className = "" }) {
   );
 }
 
-function LandingModal({ onStartGame, onOpenSettings }) {
+function MainMenuScreen({
+  completedGames,
+  menuView,
+  settings,
+  targetScore,
+  onClearCompletedGames,
+  onSelectView,
+  onStartGame,
+  onToggleMustWinByBid,
+}) {
   return (
-    <Modal id="landing-modal">
-      <div className="modal-card">
-        <h1 className="modal-title game-title">ROOK</h1>
-        <p className="modal-subtitle">Mobile Edition</p>
-        <button className="btn-primary" type="button" onClick={onStartGame}>
-          START NEW GAME
-        </button>
-        <button className="btn-secondary" type="button" onClick={onOpenSettings}>
-          OPTIONS
-        </button>
+    <section className="main-menu-screen" aria-label="Main menu">
+      <div className="main-menu-shell">
+        <aside className="main-menu-brand" aria-label="Rook overview">
+          <img className="main-menu-logo" src="/rook-icon.svg" alt="" aria-hidden="true" />
+          <p className="menu-kicker">Partnership card game</p>
+          <h1>Rook</h1>
+          <p className="menu-copy">Set the table first. Start bidding only when you are ready.</p>
+          <div className="menu-stat-strip" aria-label="Game defaults">
+            <div>
+              <span>{targetScore}</span>
+              <small>Target</small>
+            </div>
+            <div>
+              <span>4</span>
+              <small>Players</small>
+            </div>
+            <div>
+              <span>{completedGames.length}</span>
+              <small>Finished</small>
+            </div>
+          </div>
+        </aside>
+
+        <section className="main-menu-panel" aria-label="Menu options">
+          <nav className="main-menu-actions" aria-label="Main menu options">
+            <button className="menu-action menu-action-primary" type="button" onClick={onStartGame}>
+              <span>Start New Game</span>
+              <small>Deal a fresh table</small>
+            </button>
+            <button
+              className={menuView === "home" ? "menu-action active" : "menu-action"}
+              type="button"
+              aria-current={menuView === "home" ? "page" : undefined}
+              onClick={() => onSelectView("home")}
+            >
+              <span>Main Menu</span>
+              <small>Table overview</small>
+            </button>
+            <button
+              className={menuView === "completed" ? "menu-action active" : "menu-action"}
+              type="button"
+              aria-current={menuView === "completed" ? "page" : undefined}
+              onClick={() => onSelectView("completed")}
+            >
+              <span>Completed Games</span>
+              <small>{completedGames.length ? `${completedGames.length} saved` : "No saved games"}</small>
+            </button>
+            <button
+              className={menuView === "settings" ? "menu-action active" : "menu-action"}
+              type="button"
+              aria-current={menuView === "settings" ? "page" : undefined}
+              onClick={() => onSelectView("settings")}
+            >
+              <span>Settings</span>
+              <small>Rules and scoring</small>
+            </button>
+            <button
+              className={menuView === "how-to" ? "menu-action active" : "menu-action"}
+              type="button"
+              aria-current={menuView === "how-to" ? "page" : undefined}
+              onClick={() => onSelectView("how-to")}
+            >
+              <span>How To Play</span>
+              <small>Bid, trump, tricks</small>
+            </button>
+          </nav>
+
+          <div className="main-menu-content">
+            {menuView === "home" && <MenuHome targetScore={targetScore} onStartGame={onStartGame} />}
+            {menuView === "completed" && (
+              <CompletedGamesView completedGames={completedGames} onClearCompletedGames={onClearCompletedGames} />
+            )}
+            {menuView === "settings" && (
+              <MenuSettingsView settings={settings} targetScore={targetScore} onToggleMustWinByBid={onToggleMustWinByBid} />
+            )}
+            {menuView === "how-to" && <HowToPlayView />}
+          </div>
+        </section>
       </div>
-    </Modal>
+    </section>
+  );
+}
+
+function MenuHome({ targetScore, onStartGame }) {
+  return (
+    <>
+      <p className="section-kicker">Main Menu</p>
+      <h2>Ready table</h2>
+      <p className="menu-panel-copy">Your team sits South and North. First team to {targetScore} wins.</p>
+      <div className="menu-summary-grid">
+        <div className="menu-summary-card red-card">
+          <span>Bid</span>
+          <strong>Start at 100</strong>
+        </div>
+        <div className="menu-summary-card green-card">
+          <span>Kitty</span>
+          <strong>5 cards</strong>
+        </div>
+        <div className="menu-summary-card yellow-card">
+          <span>Score</span>
+          <strong>Bid or set</strong>
+        </div>
+      </div>
+      <button className="menu-large-start" type="button" onClick={onStartGame}>
+        Start New Game
+      </button>
+    </>
+  );
+}
+
+function CompletedGamesView({ completedGames, onClearCompletedGames }) {
+  return (
+    <>
+      <p className="section-kicker">History</p>
+      <h2>Completed games</h2>
+      {completedGames.length === 0 ? (
+        <div className="empty-history">
+          <strong>No completed games yet</strong>
+          <span>Finished games will appear here with winner, score, and round count.</span>
+        </div>
+      ) : (
+        <>
+          <ol className="completed-game-list">
+            {completedGames.map((completedGame) => (
+              <li className="completed-game" key={completedGame.id}>
+                <div>
+                  <strong>{completedGame.winner.toUpperCase()} won</strong>
+                  <span>{formatCompletedDate(completedGame.finishedAt)}</span>
+                </div>
+                <div className="completed-score">
+                  <span>US {completedGame.scores.us}</span>
+                  <span>THEM {completedGame.scores.them}</span>
+                  <span>{completedGame.rounds} rounds</span>
+                </div>
+              </li>
+            ))}
+          </ol>
+          <button className="menu-text-button" type="button" onClick={onClearCompletedGames}>
+            Clear History
+          </button>
+        </>
+      )}
+    </>
+  );
+}
+
+function MenuSettingsView({ settings, targetScore, onToggleMustWinByBid }) {
+  return (
+    <>
+      <p className="section-kicker">Settings</p>
+      <h2>Game rules</h2>
+      <div className="menu-settings-list">
+        <label className="menu-setting-row">
+          <span>
+            <strong>Must Win Bid</strong>
+            <small>Only the bidding team can finish the game after reaching {targetScore}.</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={settings.mustWinByBid}
+            onChange={(event) => onToggleMustWinByBid(event.target.checked)}
+          />
+        </label>
+      </div>
+    </>
+  );
+}
+
+function HowToPlayView() {
+  return (
+    <>
+      <p className="section-kicker">Rules</p>
+      <h2>How to play</h2>
+      <div className="rules-list">
+        <p>
+          Bid for the right to take the kitty, name trump, and lead the first trick. Passing leaves the bid to the
+          remaining players.
+        </p>
+        <p>Follow the led color when you can. Trump beats other colors, and the Rook follows trump.</p>
+        <p>Hit your bid to score your points. Miss it and your team loses the bid amount.</p>
+      </div>
+    </>
   );
 }
 
@@ -866,15 +1174,20 @@ function KittyModal({ game, onConfirmDiscard }) {
   );
 }
 
-function RoundEndModal({ result, onStartRound }) {
+function RoundEndModal({ result, primaryLabel, secondaryLabel, onPrimary, onSecondary }) {
   return (
     <Modal id="round-end-modal">
       <div className="modal-card">
         <h2 className="modal-title">{result.title}</h2>
         <p className="modal-subtitle round-detail">{result.detail}</p>
-        <button className="btn-primary" type="button" onClick={onStartRound}>
-          NEXT ROUND
+        <button className="btn-primary" type="button" onClick={onPrimary}>
+          {primaryLabel}
         </button>
+        {secondaryLabel && (
+          <button className="btn-secondary" type="button" onClick={onSecondary}>
+            {secondaryLabel}
+          </button>
+        )}
       </div>
     </Modal>
   );
