@@ -18,6 +18,8 @@ import {
 const BID_MAX = 150;
 const TARGET_SCORE = 500;
 const COMPLETED_GAMES_STORAGE_KEY = "rook.completedGames";
+const ACTIVE_GAME_STORAGE_KEY = "rook.activeGame:v1";
+const ACTIVE_GAME_STORAGE_VERSION = 1;
 const MAX_COMPLETED_GAMES = 20;
 
 const PLAY_SLOTS = [
@@ -128,6 +130,86 @@ function saveCompletedGames(completedGames) {
   }
 }
 
+function normalizeSavedGame(savedGame) {
+  if (!savedGame || typeof savedGame !== "object") return null;
+
+  const initialGame = createInitialGame();
+  const savedHands =
+    Array.isArray(savedGame.hands) && savedGame.hands.length === 4
+      ? savedGame.hands.map((hand) => (Array.isArray(hand) ? hand : []))
+      : initialGame.hands;
+  const savedBidInfo = savedGame.bidInfo && typeof savedGame.bidInfo === "object" ? savedGame.bidInfo : {};
+  const savedSettings = savedGame.settings && typeof savedGame.settings === "object" ? savedGame.settings : {};
+  const savedScores = savedGame.scores && typeof savedGame.scores === "object" ? savedGame.scores : {};
+  const savedPointsTaken = savedGame.pointsTaken && typeof savedGame.pointsTaken === "object" ? savedGame.pointsTaken : {};
+
+  return cloneGameState({
+    ...initialGame,
+    ...savedGame,
+    kitty: Array.isArray(savedGame.kitty) ? savedGame.kitty : initialGame.kitty,
+    hands: savedHands,
+    scores: { ...initialGame.scores, ...savedScores },
+    bidInfo: {
+      ...initialGame.bidInfo,
+      ...savedBidInfo,
+      passed: initialGame.bidInfo.passed.map((initialValue, index) =>
+        Array.isArray(savedBidInfo.passed) ? Boolean(savedBidInfo.passed[index]) : initialValue,
+      ),
+    },
+    tricks: Array.isArray(savedGame.tricks) ? savedGame.tricks : initialGame.tricks,
+    currentTrick: Array.isArray(savedGame.currentTrick) ? savedGame.currentTrick : initialGame.currentTrick,
+    pointsTaken: { ...initialGame.pointsTaken, ...savedPointsTaken },
+    settings: { ...initialGame.settings, ...savedSettings },
+    discardSelection: Array.isArray(savedGame.discardSelection) ? savedGame.discardSelection : initialGame.discardSelection,
+    toast: initialGame.toast,
+    bubbles: initialGame.bubbles,
+    menuOpen: false,
+    roundResult:
+      savedGame.roundResult && typeof savedGame.roundResult === "object" ? { ...savedGame.roundResult } : initialGame.roundResult,
+  });
+}
+
+function loadActiveGame() {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const savedGame = window.localStorage.getItem(ACTIVE_GAME_STORAGE_KEY);
+    if (!savedGame) return null;
+
+    const parsedGame = JSON.parse(savedGame);
+    if (parsedGame?.version !== ACTIVE_GAME_STORAGE_VERSION) return null;
+
+    return normalizeSavedGame(parsedGame.game);
+  } catch {
+    return null;
+  }
+}
+
+function getSavableGameState(state) {
+  const savableGame = cloneGameState(state);
+  savableGame.toast = { message: "", visible: false };
+  savableGame.bubbles = { 1: "", 2: "", 3: "" };
+  savableGame.menuOpen = false;
+  return savableGame;
+}
+
+function saveActiveGame(state) {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.localStorage.setItem(
+      ACTIVE_GAME_STORAGE_KEY,
+      JSON.stringify({
+        version: ACTIVE_GAME_STORAGE_VERSION,
+        savedAt: new Date().toISOString(),
+        game: getSavableGameState(state),
+      }),
+    );
+  } catch {
+    // Local storage can fail in private browsing or restricted embeds.
+  }
+}
+
 function formatCompletedDate(value) {
   try {
     return new Intl.DateTimeFormat(undefined, {
@@ -142,14 +224,21 @@ function formatCompletedDate(value) {
 }
 
 export default function App() {
-  const gameRef = useRef(createInitialGame());
+  const gameRef = useRef(null);
   const activeTimeoutsRef = useRef([]);
+
+  if (gameRef.current === null) {
+    gameRef.current = loadActiveGame() || createInitialGame();
+  }
+
   const [game, setGame] = useState(() => cloneGameState(gameRef.current));
   const [menuView, setMenuView] = useState("home");
   const [completedGames, setCompletedGames] = useState(loadCompletedGames);
 
   function commitGame() {
-    setGame(cloneGameState(gameRef.current));
+    const nextGame = cloneGameState(gameRef.current);
+    saveActiveGame(nextGame);
+    setGame(nextGame);
   }
 
   function mutateGame(mutator) {
@@ -257,6 +346,12 @@ export default function App() {
   function processTurn() {
     const state = gameRef.current;
 
+    if (state.phase === "KITTY_WAIT") {
+      const winner = state.bidInfo.bidder ?? state.dealer;
+      delay(() => botChooseKitty(winner), 1000);
+      return;
+    }
+
     if (state.phase === "BID") {
       const activeBidderCount = state.bidInfo.passed.filter((hasPassed) => !hasPassed).length;
 
@@ -280,7 +375,12 @@ export default function App() {
 
     if (state.phase === "PLAY") {
       if (state.currentTrick.length === 4) {
-        delay(resolveTrick, 1500);
+        if (state.collectingWinner !== null) {
+          const winner = state.collectingWinner;
+          delay(() => collectResolvedTrick(winner), 500);
+        } else {
+          delay(resolveTrick, 1500);
+        }
         return;
       }
 
@@ -358,28 +458,30 @@ export default function App() {
     const revealDuration = 5000;
     const thinkDuration = (1 + Math.floor(Math.random() * 4)) * 1000;
 
-    delay(() => {
-      const latest = gameRef.current;
-      if (latest.phase !== "KITTY_WAIT" || latest.bidInfo.bidder !== winner) return;
+    delay(() => botChooseKitty(winner), revealDuration + thinkDuration);
+  }
 
-      let chosenTrump = "Red";
+  function botChooseKitty(winner) {
+    const latest = gameRef.current;
+    if (latest.phase !== "KITTY_WAIT" || latest.bidInfo.bidder !== winner) return;
 
-      mutateGame((nextState) => {
-        const plan = chooseBotKittyPlan(nextState.hands[winner]);
-        const discards = plan.discards;
-        chosenTrump = plan.trump;
+    let chosenTrump = "Red";
 
-        nextState.hands[winner] = plan.hand;
-        nextState.kittyPoints = discards.reduce((sum, card) => sum + card.value, 0);
-        nextState.showKittyDisplay = false;
-        nextState.trump = chosenTrump;
-        nextState.phase = "PLAY";
-        nextState.currentTurn = winner;
-      });
+    mutateGame((nextState) => {
+      const plan = chooseBotKittyPlan(nextState.hands[winner]);
+      const discards = plan.discards;
+      chosenTrump = plan.trump;
 
-      showToast(`Trump is ${chosenTrump}`);
-      processTurn();
-    }, revealDuration + thinkDuration);
+      nextState.hands[winner] = plan.hand;
+      nextState.kittyPoints = discards.reduce((sum, card) => sum + card.value, 0);
+      nextState.showKittyDisplay = false;
+      nextState.trump = chosenTrump;
+      nextState.phase = "PLAY";
+      nextState.currentTurn = winner;
+    });
+
+    showToast(`Trump is ${chosenTrump}`);
+    processTurn();
   }
 
   function toggleDiscard(index) {
@@ -521,31 +623,35 @@ export default function App() {
 
     showBubble(winner, `+${points}`);
 
-    delay(() => {
-      let shouldContinue = false;
-      let completedGame = null;
+    delay(() => collectResolvedTrick(winner), 500);
+  }
 
-      mutateGame((nextState) => {
-        nextState.tricks.push(nextState.currentTrick.map((play) => ({ ...play })));
-        nextState.currentTrick = [];
-        nextState.collectingWinner = null;
-        nextState.currentTurn = winner;
+  function collectResolvedTrick(winner) {
+    let shouldContinue = false;
+    let completedGame = null;
 
-        if (nextState.hands[0].length === 0) {
-          completedGame = finishRound(nextState);
-        } else {
-          shouldContinue = true;
-        }
-      });
+    mutateGame((nextState) => {
+      if (nextState.phase !== "PLAY" || nextState.currentTrick.length !== 4 || nextState.collectingWinner !== winner) return;
 
-      if (completedGame) {
-        recordCompletedGame(completedGame);
+      nextState.tricks.push(nextState.currentTrick.map((play) => ({ ...play })));
+      nextState.currentTrick = [];
+      nextState.collectingWinner = null;
+      nextState.currentTurn = winner;
+
+      if (nextState.hands[0].length === 0) {
+        completedGame = finishRound(nextState);
+      } else {
+        shouldContinue = true;
       }
+    });
 
-      if (shouldContinue) {
-        processTurn();
-      }
-    }, 500);
+    if (completedGame) {
+      recordCompletedGame(completedGame);
+    }
+
+    if (shouldContinue) {
+      processTurn();
+    }
   }
 
   function finishRound(state) {
@@ -608,6 +714,8 @@ export default function App() {
   }
 
   useEffect(() => {
+    processTurn();
+
     return () => {
       clearAllTimeouts();
     };
