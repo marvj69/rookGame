@@ -6,7 +6,9 @@ import {
   canSatisfyKittyDiscardRule,
   getEffectiveColor,
   getCardPower,
+  getKittyDiscardRule,
   getLeadColor,
+  isPointCard,
   isTrumpCard,
   isValidKittyDiscard,
   isValidMove,
@@ -176,16 +178,139 @@ export function chooseBotBid(game, playerId, maxBid = MAX_BID) {
   return nextBid <= ceiling ? nextBid : 0;
 }
 
-function* discardCombinations(length, choose, start = 0, prefix = []) {
+const KITTY_PLAN_CACHE_LIMIT = 2000;
+const LEGAL_DISCARD_CACHE_LIMIT = 4000;
+const discardCombinationCache = new Map();
+const legalDiscardCache = new Map();
+const kittyPlanCache = new Map();
+
+function rememberCacheValue(cache, key, value, limit) {
+  if (cache.size >= limit) {
+    cache.delete(cache.keys().next().value);
+  }
+
+  cache.set(key, value);
+}
+
+function getOrderedHandSignature(fullHand) {
+  return fullHand.map((card) => card.id).join(",");
+}
+
+function createDiscardCombinations(length, choose, start = 0, prefix = [], combinations = []) {
   if (prefix.length === choose) {
-    yield prefix;
-    return;
+    combinations.push({
+      indexes: prefix,
+      mask: prefix.reduce((mask, index) => mask | (1 << index), 0),
+    });
+    return combinations;
   }
 
   const remainingNeeded = choose - prefix.length;
   for (let index = start; index <= length - remainingNeeded; index += 1) {
-    yield* discardCombinations(length, choose, index + 1, [...prefix, index]);
+    createDiscardCombinations(length, choose, index + 1, [...prefix, index], combinations);
   }
+
+  return combinations;
+}
+
+function getDiscardCombinations(length, choose) {
+  const key = `${length}:${choose}`;
+  const cached = discardCombinationCache.get(key);
+  if (cached) return cached;
+
+  const combinations = createDiscardCombinations(length, choose);
+  discardCombinationCache.set(key, combinations);
+  return combinations;
+}
+
+function createDiscardContext(fullHand, trump) {
+  const rule = getKittyDiscardRule(fullHand, trump);
+  if (!rule.canSatisfy) return null;
+
+  return {
+    rule,
+    cards: fullHand.map((card) => {
+      const pointCard = isPointCard(card);
+      const trumpPointCard = pointCard && isTrump(card, trump);
+
+      return {
+        canDiscard: !pointCard || (rule.requiredTrumpPointCount > 0 && trumpPointCard),
+        nonPoint: !pointCard,
+        trumpPoint: trumpPointCard,
+      };
+    }),
+  };
+}
+
+function isLegalDiscardCombination(combination, context) {
+  let nonPointCount = 0;
+  let trumpPointCount = 0;
+
+  for (const index of combination.indexes) {
+    const cardContext = context.cards[index];
+    if (!cardContext.canDiscard) return false;
+    if (cardContext.nonPoint) nonPointCount += 1;
+    if (cardContext.trumpPoint) trumpPointCount += 1;
+  }
+
+  return (
+    nonPointCount === context.rule.requiredNonPointCount &&
+    trumpPointCount === context.rule.requiredTrumpPointCount
+  );
+}
+
+function getLegalDiscardIdSets(fullHand, trump, handSignature) {
+  const cacheKey = `${handSignature}|${trump}`;
+  const cached = legalDiscardCache.get(cacheKey);
+  if (cached) return cached;
+
+  const context = createDiscardContext(fullHand, trump);
+  const legalDiscardIdSets = [];
+
+  if (context) {
+    for (const combination of getDiscardCombinations(fullHand.length, DISCARD_COUNT)) {
+      if (isLegalDiscardCombination(combination, context)) {
+        legalDiscardIdSets.push(combination.indexes.map((index) => fullHand[index].id));
+      }
+    }
+  }
+
+  rememberCacheValue(legalDiscardCache, cacheKey, legalDiscardIdSets, LEGAL_DISCARD_CACHE_LIMIT);
+  return legalDiscardIdSets;
+}
+
+function materializeKittyPlan(fullHand, cachedPlan) {
+  const discardIds = new Set(cachedPlan.discardIds);
+  const discards = [];
+  const keptCards = [];
+
+  fullHand.forEach((card) => {
+    if (discardIds.has(card.id)) {
+      discards.push(card);
+    } else {
+      keptCards.push(card);
+    }
+  });
+
+  return {
+    score: cachedPlan.score,
+    trump: cachedPlan.trump,
+    discards,
+    hand: sortHand(keptCards),
+  };
+}
+
+function rememberKittyPlan(handSignature, plan) {
+  rememberCacheValue(
+    kittyPlanCache,
+    handSignature,
+    {
+      score: plan.score,
+      trump: plan.trump,
+      discardIds: plan.discards.map((card) => card.id),
+    },
+    KITTY_PLAN_CACHE_LIMIT,
+  );
 }
 
 function evaluateKeptHand(keptCards, discardedCards, trump) {
@@ -229,25 +354,25 @@ function createFallbackKittyPlan(fullHand) {
 }
 
 export function chooseBotKittyPlan(fullHand) {
+  const handSignature = getOrderedHandSignature(fullHand);
+  const cachedPlan = kittyPlanCache.get(handSignature);
+  if (cachedPlan) return materializeKittyPlan(fullHand, cachedPlan);
+
   let bestPlan = null;
 
   COLORS.forEach((trump) => {
-    for (const discardIndexes of discardCombinations(fullHand.length, DISCARD_COUNT)) {
-      const discardSet = new Set(discardIndexes);
+    for (const discardIds of getLegalDiscardIdSets(fullHand, trump, handSignature)) {
+      const discardSet = new Set(discardIds);
       const discardedCards = [];
       const keptCards = [];
 
-      fullHand.forEach((card, index) => {
-        if (discardSet.has(index)) {
+      fullHand.forEach((card) => {
+        if (discardSet.has(card.id)) {
           discardedCards.push(card);
         } else {
           keptCards.push(card);
         }
       });
-
-      if (!isValidKittyDiscard(fullHand, discardedCards, trump)) {
-        continue;
-      }
 
       const score = evaluateKeptHand(keptCards, discardedCards, trump);
 
@@ -262,7 +387,14 @@ export function chooseBotKittyPlan(fullHand) {
     }
   });
 
-  return bestPlan || createFallbackKittyPlan(fullHand);
+  let plan = bestPlan || createFallbackKittyPlan(fullHand);
+
+  if (!isValidKittyDiscard(fullHand, plan.discards, plan.trump)) {
+    plan = createFallbackKittyPlan(fullHand);
+  }
+
+  rememberKittyPlan(handSignature, plan);
+  return plan;
 }
 
 function flattenCompletedTricks(game) {
@@ -482,157 +614,6 @@ function chooseFollowingCard(game, playerId, candidates) {
   return sortSmallestWinner(winningCards, game)[0];
 }
 
-function cloneGameForProjection(game) {
-  return {
-    ...game,
-    hands: game.hands.map((hand) => [...hand]),
-    bidInfo: {
-      ...game.bidInfo,
-      passed: [...game.bidInfo.passed],
-    },
-    tricks: game.tricks.map((trick) => trick.map((play) => ({ ...play }))),
-    currentTrick: game.currentTrick.map((play) => ({ ...play })),
-    pointsTaken: { ...game.pointsTaken },
-  };
-}
-
-function chooseProjectedFollowerCard(projectedGame, playerId) {
-  const candidates = getValidCardsForPlayer(projectedGame, playerId);
-
-  if (candidates.length <= 1) return candidates[0] ?? null;
-  return chooseFollowingCard(projectedGame, playerId, candidates);
-}
-
-function resolveProjectedTrick(currentTrick, trump) {
-  const leadColor = getLeadColor(currentTrick, trump);
-  let bestIndex = 0;
-  let bestPower = getCardPower(currentTrick[0].card, trump, leadColor);
-  let points = 0;
-
-  currentTrick.forEach((play, index) => {
-    points += play.card.value;
-
-    if (index === 0) return;
-
-    const power = getCardPower(play.card, trump, leadColor);
-    if (power > bestPower) {
-      bestPower = power;
-      bestIndex = index;
-    }
-  });
-
-  return {
-    points,
-    winner: currentTrick[bestIndex].pid,
-  };
-}
-
-function projectTrickAfterCard(game, playerId, card) {
-  const projectedGame = cloneGameForProjection(game);
-  const firstCardIndex = projectedGame.hands[playerId].findIndex((heldCard) => heldCard.id === card.id);
-
-  if (firstCardIndex < 0) return null;
-
-  projectedGame.hands[playerId].splice(firstCardIndex, 1);
-  projectedGame.currentTrick.push({ pid: playerId, card });
-  projectedGame.currentTurn = (playerId + 1) % 4;
-
-  while (projectedGame.currentTrick.length < 4) {
-    const nextPlayerId = projectedGame.currentTurn;
-    const nextCard = chooseProjectedFollowerCard(projectedGame, nextPlayerId);
-
-    if (!nextCard) return null;
-
-    const nextCardIndex = projectedGame.hands[nextPlayerId].findIndex((heldCard) => heldCard.id === nextCard.id);
-    if (nextCardIndex < 0) return null;
-
-    projectedGame.hands[nextPlayerId].splice(nextCardIndex, 1);
-    projectedGame.currentTrick.push({ pid: nextPlayerId, card: nextCard });
-    projectedGame.currentTurn = (nextPlayerId + 1) % 4;
-  }
-
-  const result = resolveProjectedTrick(projectedGame.currentTrick, projectedGame.trump);
-  return {
-    ...result,
-    handsAfterTrick: projectedGame.hands,
-  };
-}
-
-function remainingHandPoints(hands) {
-  return hands.flat().reduce((sum, card) => sum + card.value, 0);
-}
-
-function cardSpendPenalty(card, trump, wonTrick) {
-  let penalty = wonTrick ? card.value * 0.06 : card.value * 0.85;
-
-  if (isTrump(card, trump)) {
-    const trumpPower = cardLeadPower(card, trump) - 500;
-    penalty += 2 + Math.max(0, trumpPower - 10) * 0.6;
-  } else if (card.rank === 14) {
-    penalty += 1.5;
-  } else if (card.rank === 13) {
-    penalty += 0.8;
-  }
-
-  return penalty;
-}
-
-function scoreProjectedCard(game, playerId, card, projection) {
-  const playerTeam = teamForPlayer(playerId);
-  const winningTeam = teamForPlayer(projection.winner);
-  const bidTeam = teamForPlayer(getTeamBidder(game));
-  const bid = Math.max(MIN_BID, game.bidInfo.highBid || MIN_BID);
-  const bidTeamPointsBefore = game.pointsTaken[bidTeam] + game.kittyPoints;
-  const bidTeamPointsAfter = bidTeamPointsBefore + (winningTeam === bidTeam ? projection.points : 0);
-  const maxBidTeamPointsAfter = bidTeamPointsAfter + remainingHandPoints(projection.handsAfterTrick);
-  const wonTrick = winningTeam === playerTeam;
-
-  let score = wonTrick ? 4 : -4;
-  score += wonTrick ? projection.points * 1.7 : -projection.points * 1.7;
-
-  if (winningTeam === bidTeam) {
-    score += playerTeam === bidTeam ? projection.points * 1.0 : -projection.points * 1.25;
-  } else {
-    score += playerTeam === bidTeam ? -projection.points * 1.1 : projection.points * 1.05;
-  }
-
-  if (bidTeamPointsBefore < bid && bidTeamPointsAfter >= bid) {
-    score += playerTeam === bidTeam ? 28 : -28;
-  }
-
-  if (maxBidTeamPointsAfter < bid) {
-    score += playerTeam === bidTeam ? -70 : 70;
-  }
-
-  return score - cardSpendPenalty(card, game.trump, wonTrick);
-}
-
-function chooseProjectedCard(game, playerId, candidates, fallbackCard) {
-  let bestProjection = null;
-  let fallbackProjection = null;
-
-  candidates.forEach((card) => {
-    const projection = projectTrickAfterCard(game, playerId, card);
-    if (!projection) return;
-
-    const score = scoreProjectedCard(game, playerId, card, projection);
-    const candidateProjection = { card, score };
-
-    if (!bestProjection || score > bestProjection.score) {
-      bestProjection = candidateProjection;
-    }
-
-    if (fallbackCard && card.id === fallbackCard.id) {
-      fallbackProjection = candidateProjection;
-    }
-  });
-
-  if (!bestProjection) return fallbackCard;
-  if (!fallbackProjection) return bestProjection.card;
-
-  return bestProjection.score >= fallbackProjection.score + 2.5 ? bestProjection.card : fallbackCard;
-}
-
 export function chooseBotPlay(game, playerId) {
   const hand = game.hands[playerId];
   const leadColor = getLeadColor(game.currentTrick, game.trump);
@@ -645,12 +626,10 @@ export function chooseBotPlay(game, playerId) {
   if (candidates.length <= 1) return candidates[0] ?? null;
 
   if (game.currentTrick.length === 0) {
-    const fallbackCard = chooseLeadCard(game, playerId, candidates);
-    return chooseProjectedCard(game, playerId, candidates, fallbackCard);
+    return chooseLeadCard(game, playerId, candidates);
   }
 
-  const fallbackCard = chooseFollowingCard(game, playerId, candidates);
-  return chooseProjectedCard(game, playerId, candidates, fallbackCard);
+  return chooseFollowingCard(game, playerId, candidates);
 }
 
 export function describeAiHandStrength(hand) {

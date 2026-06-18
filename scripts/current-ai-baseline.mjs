@@ -41,10 +41,6 @@ function getTeamBidder(game) {
   return game.bidInfo.bidder ?? game.dealer;
 }
 
-function partnerForPlayer(playerId) {
-  return (playerId + 2) % 4;
-}
-
 function countByColor(hand) {
   return COLORS.reduce((counts, color) => {
     counts[color] = hand.filter((card) => card.color === color).length;
@@ -58,52 +54,12 @@ function colorCardScore(card) {
   if (card.rank === 13) return 6;
   if (card.rank === 12) return 4;
   if (card.rank === 11) return 2;
-  if (card.rank === 1) return 1;
-  return 0;
-}
-
-function countEffectiveColors(hand, trump) {
-  return hand.reduce((counts, card) => {
-    const color = effectiveColor(card, trump);
-    counts[color] = (counts[color] || 0) + 1;
-    return counts;
-  }, {});
-}
-
-function controlScore(card, trump, colorCounts) {
-  const color = effectiveColor(card, trump);
-  const colorCount = colorCounts[color] || 0;
-
-  if (isTrump(card, trump)) {
-    if (card.color === "ROOK") return 5;
-    if (card.rank === 14) return 12;
-    if (card.rank === 13) return 9;
-    if (card.rank === 12) return 6;
-    if (card.rank === 11) return 3;
-    if (card.rank === 1) return colorCount >= 5 ? 2 : -2;
-    return Math.max(0, card.rank - 8) * 0.5;
-  }
-
-  if (card.rank === 14) return colorCount >= 2 ? 5 : 3;
-  if (card.rank === 13) return colorCount >= 3 ? 2.5 : 1;
-  if (card.rank === 12) return colorCount >= 4 ? 1 : 0;
-  if (card.rank === 1) return colorCount <= 2 ? -1 : -3;
-  return 0;
-}
-
-function pointLiability(card, trump, colorCounts) {
-  if (isTrump(card, trump) || card.value === 0) return 0;
-
-  const colorCount = colorCounts[effectiveColor(card, trump)] || 0;
-  if (card.rank === 1) return colorCount >= 4 ? 4 : 7;
-  if (card.rank === 10) return colorCount >= 4 ? 2 : 4;
-  if (card.rank === 5) return colorCount >= 3 ? 1 : 2;
+  if (card.rank === 1) return 2;
   return 0;
 }
 
 function evaluateHandForTrump(hand, trump) {
   const counts = countByColor(hand);
-  const effectiveCounts = countEffectiveColors(hand, trump);
   const trumpCards = hand.filter((card) => isTrump(card, trump));
   const trumpCount = trumpCards.length;
   const pointTotal = hand.reduce((sum, card) => sum + card.value, 0);
@@ -120,21 +76,9 @@ function evaluateHandForTrump(hand, trump) {
     return sum;
   }, 0);
   const rookBonus = hand.some((card) => card.color === "ROOK") ? 4 : 0;
-  const controlBonus = hand.reduce((sum, card) => sum + controlScore(card, trump, effectiveCounts), 0);
-  const liabilityPenalty = hand.reduce((sum, card) => sum + pointLiability(card, trump, effectiveCounts), 0);
-  const trumpLengthBonus = trumpCount >= 5 ? (trumpCount - 4) * 3 : trumpCount <= 2 ? -4 : 0;
 
   return {
-    score:
-      pointTotal * 0.32 +
-      trumpCount * 4.8 +
-      trumpStrength +
-      sideStrength +
-      shortageBonus +
-      rookBonus +
-      controlBonus +
-      trumpLengthBonus -
-      liabilityPenalty,
+    score: pointTotal * 0.35 + trumpCount * 5.5 + trumpStrength + sideStrength + shortageBonus + rookBonus,
     trumpCount,
     pointTotal,
   };
@@ -168,12 +112,13 @@ export function chooseBotBid(game, playerId, maxBid = MAX_BID) {
   if (nextBid > bidLimit || nextBid > ceiling) return 0;
 
   if (currentBidder !== null && teamForPlayer(currentBidder) === teamForPlayer(playerId)) {
-    return ceiling >= nextBid + 25 ? nextBid : 0;
+    return ceiling >= nextBid + 15 ? nextBid : 0;
   }
 
   if (currentBidder === null && ceiling < MIN_BID) return 0;
 
-  return nextBid <= ceiling ? nextBid : 0;
+  const defensivePush = currentBidder !== null && teamForPlayer(currentBidder) !== teamForPlayer(playerId) ? 5 : 0;
+  return nextBid <= ceiling + defensivePush ? nextBid : 0;
 }
 
 function* discardCombinations(length, choose, start = 0, prefix = []) {
@@ -191,7 +136,6 @@ function* discardCombinations(length, choose, start = 0, prefix = []) {
 function evaluateKeptHand(keptCards, discardedCards, trump) {
   const base = evaluateHandForTrump(keptCards, trump).score;
   const discardPoints = discardedCards.reduce((sum, card) => sum + card.value, 0);
-  const keptCounts = countEffectiveColors(keptCards, trump);
   const trumpLossPenalty = discardedCards.reduce((sum, card) => {
     if (!isTrump(card, trump)) return sum;
     return sum + 14 + colorCardScore(card) + card.value * 0.25;
@@ -200,8 +144,8 @@ function evaluateKeptHand(keptCards, discardedCards, trump) {
   const riskyPointPenalty = keptCards.reduce((sum, card) => {
     if (isTrump(card, trump)) return sum;
     if (card.value === 0) return sum;
-    if (card.rank >= 12) return sum + pointLiability(card, trump, keptCounts) * 0.25;
-    return sum + card.value * 0.55 + pointLiability(card, trump, keptCounts);
+    if (card.rank >= 12 || card.rank === 14) return sum;
+    return sum + card.value * 0.35;
   }, 0);
 
   return base + discardPoints * 1.15 + keptPoints * 0.12 - trumpLossPenalty - riskyPointPenalty;
@@ -273,24 +217,6 @@ function getPublicPlayedCards(game) {
   return [...flattenCompletedTricks(game), ...game.currentTrick.map((play) => play.card)];
 }
 
-function getKnownVoids(game) {
-  const voids = [new Set(), new Set(), new Set(), new Set()];
-  const observedTricks = [...game.tricks, game.currentTrick];
-
-  observedTricks.forEach((trick) => {
-    const leadColor = getLeadColor(trick, game.trump);
-    if (!leadColor) return;
-
-    trick.slice(1).forEach((play) => {
-      if (effectiveColor(play.card, game.trump) !== leadColor) {
-        voids[play.pid].add(leadColor);
-      }
-    });
-  });
-
-  return voids;
-}
-
 function getUnseenCards(game, playerId) {
   const knownIds = new Set([
     ...game.hands[playerId].map((card) => card.id),
@@ -349,34 +275,6 @@ function sortSmallestWinner(cards, game) {
   return [...cards].sort((a, b) => getCardPower(a, game.trump, leadColor) - getCardPower(b, game.trump, leadColor));
 }
 
-function sortVoidBuildingLeads(cards, trump) {
-  const counts = countEffectiveColors(cards, trump);
-
-  return [...cards].sort((a, b) => {
-    const countDiff = (counts[effectiveColor(a, trump)] || 0) - (counts[effectiveColor(b, trump)] || 0);
-    if (countDiff !== 0) return countDiff;
-
-    const valueDiff = a.value - b.value;
-    if (valueDiff !== 0) return valueDiff;
-
-    return cardLeadPower(a, trump) - cardLeadPower(b, trump);
-  });
-}
-
-function sortPressureLeads(cards, trump) {
-  const counts = countEffectiveColors(cards, trump);
-
-  return [...cards].sort((a, b) => {
-    const controlDiff = controlScore(b, trump, counts) - controlScore(a, trump, counts);
-    if (controlDiff !== 0) return controlDiff;
-
-    const valueDiff = b.value - a.value;
-    if (valueDiff !== 0) return valueDiff;
-
-    return cardLeadPower(b, trump) - cardLeadPower(a, trump);
-  });
-}
-
 function chooseLeadCard(game, playerId, candidates) {
   const trump = game.trump;
   const playerTeam = teamForPlayer(playerId);
@@ -398,30 +296,7 @@ function chooseLeadCard(game, playerId, candidates) {
   }
 
   if (playerTeam !== bidTeam && sideCards.length > 0) {
-    const knownVoids = getKnownVoids(game);
-    const partnerVoids = knownVoids[partnerForPlayer(playerId)];
-    const opponents = [1, 2, 3, 0].filter(
-      (candidatePlayerId) =>
-        candidatePlayerId !== playerId && teamForPlayer(candidatePlayerId) !== teamForPlayer(playerId),
-    );
-    const partnerRuffLeads = sideCards.filter((card) => partnerVoids.has(effectiveColor(card, trump)) && card.value === 0);
-
-    if (partnerRuffLeads.length > 0) {
-      return sortLowestRisk(partnerRuffLeads, trump)[0];
-    }
-
-    const pressureCards = sideCards.filter((card) => card.rank >= 13 && card.value > 0);
-    if (pressureCards.length > 0) {
-      const safePressureCards = pressureCards.filter(
-        (card) => !opponents.some((opponentId) => knownVoids[opponentId].has(effectiveColor(card, trump))),
-      );
-      return sortPressureLeads(safePressureCards.length > 0 ? safePressureCards : pressureCards, trump)[0];
-    }
-
-    const safeSideCards = sideCards.filter(
-      (card) => card.value === 0 || !opponents.some((opponentId) => knownVoids[opponentId].has(effectiveColor(card, trump))),
-    );
-    return sortVoidBuildingLeads(safeSideCards.length > 0 ? safeSideCards : sideCards, trump)[0];
+    return sortLowestRisk(sideCards, trump)[0];
   }
 
   const colorCounts = candidates.reduce((counts, card) => {
@@ -448,7 +323,6 @@ function chooseFollowingCard(game, playerId, candidates) {
   const bidTeam = teamForPlayer(getTeamBidder(game));
   const playerTeam = teamForPlayer(playerId);
   const needsPoints = playerTeam === bidTeam || trickPoints >= 15;
-  const opponentBidTeamWinning = teamForPlayer(winningPlay.pid) === bidTeam && playerTeam !== bidTeam;
 
   if (partnerWinning) {
     if (losingCards.length > 0) {
@@ -462,9 +336,8 @@ function chooseFollowingCard(game, playerId, candidates) {
   if (winningCards.length > 0) {
     const bestCheapWinner = sortSmallestWinner(winningCards, game)[0];
     const cost = bestCheapWinner.value + (isTrump(bestCheapWinner, trump) ? 4 : 0);
-    const cheapControlTake = bestCheapWinner.value === 0 && !isTrump(bestCheapWinner, trump);
 
-    if (isLastToPlay || needsPoints || cheapControlTake || opponentBidTeamWinning || trickPoints + bestCheapWinner.value >= cost + 8) {
+    if (isLastToPlay || needsPoints || trickPoints + bestCheapWinner.value >= cost + 8) {
       return bestCheapWinner;
     }
   }
