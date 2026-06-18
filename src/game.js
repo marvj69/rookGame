@@ -82,6 +82,73 @@ export function createCard(color, rank, id) {
   };
 }
 
+export function getEffectiveColor(card, trump) {
+  return card.color === "ROOK" && trump ? trump : card.color;
+}
+
+export function isTrumpCard(card, trump) {
+  return Boolean(trump) && getEffectiveColor(card, trump) === trump;
+}
+
+export function isPointCard(card) {
+  return card.value > 0;
+}
+
+export function getKittyDiscardRule(hand, trump) {
+  const nonPointCount = hand.filter((card) => !isPointCard(card)).length;
+  const requiredNonPointCount = Math.min(DISCARD_COUNT, nonPointCount);
+  const requiredTrumpPointCount = DISCARD_COUNT - requiredNonPointCount;
+  const trumpPointCount = trump
+    ? hand.filter((card) => isPointCard(card) && isTrumpCard(card, trump)).length
+    : 0;
+
+  return {
+    nonPointCount,
+    requiredNonPointCount,
+    requiredTrumpPointCount,
+    trumpPointCount,
+    canSatisfy: requiredTrumpPointCount === 0 || trumpPointCount >= requiredTrumpPointCount,
+  };
+}
+
+export function canSatisfyKittyDiscardRule(hand, trump) {
+  return getKittyDiscardRule(hand, trump).canSatisfy;
+}
+
+export function canDiscardCard(card, hand, trump) {
+  if (!card) return false;
+  if (!isPointCard(card)) return true;
+
+  const rule = getKittyDiscardRule(hand, trump);
+  return rule.canSatisfy && rule.requiredTrumpPointCount > 0 && isTrumpCard(card, trump);
+}
+
+export function isValidKittyDiscard(hand, discards, trump) {
+  if (!trump || discards.length !== DISCARD_COUNT) return false;
+
+  const rule = getKittyDiscardRule(hand, trump);
+  if (!rule.canSatisfy) return false;
+
+  const handIds = new Set(hand.map((card) => card.id));
+  const discardIds = new Set();
+
+  for (const card of discards) {
+    if (!card || !handIds.has(card.id) || discardIds.has(card.id) || !canDiscardCard(card, hand, trump)) {
+      return false;
+    }
+
+    discardIds.add(card.id);
+  }
+
+  const selectedNonPointCount = discards.filter((card) => !isPointCard(card)).length;
+  const selectedTrumpPointCount = discards.filter((card) => isPointCard(card) && isTrumpCard(card, trump)).length;
+
+  return (
+    selectedNonPointCount === rule.requiredNonPointCount &&
+    selectedTrumpPointCount === rule.requiredTrumpPointCount
+  );
+}
+
 export function buildDeck() {
   const deck = [];
   let id = 0;
@@ -133,7 +200,7 @@ export function sortHand(hand) {
 }
 
 export function getCardPower(card, trump, leadColor) {
-  const effectiveColor = card.color === "ROOK" ? trump : card.color;
+  const effectiveColor = getEffectiveColor(card, trump);
   const baseRankPower = card.rank === 1 ? 1.5 : card.rank;
   const power = card.color === "ROOK" ? 0.5 : baseRankPower;
 
@@ -145,17 +212,17 @@ export function getCardPower(card, trump, leadColor) {
 export function getLeadColor(currentTrick, trump) {
   const leadCard = currentTrick[0]?.card;
   if (!leadCard) return null;
-  return leadCard.color === "ROOK" ? trump : leadCard.color;
+  return getEffectiveColor(leadCard, trump);
 }
 
 export function isValidMove(card, hand, leadColor, trump) {
   if (!leadColor) return true;
 
-  const cardColor = card.color === "ROOK" ? trump : card.color;
+  const cardColor = getEffectiveColor(card, trump);
   if (cardColor === leadColor) return true;
 
   const hasLeadColor = hand.some((heldCard) => {
-    const heldColor = heldCard.color === "ROOK" ? trump : heldCard.color;
+    const heldColor = getEffectiveColor(heldCard, trump);
     return heldColor === leadColor;
   });
 

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "test": "node scripts/validate-discard-rule.mjs",
     "build": "vite build",
     "ai:benchmark": "node scripts/benchmark-ai.mjs",
     "preview": "vite preview --host 127.0.0.1"

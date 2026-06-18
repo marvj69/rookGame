@@ -2,13 +2,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { chooseBotBid, chooseBotKittyPlan, chooseBotPlay } from "./ai.js";
 import {
   BID_START,
+  COLORS,
   DISCARD_COUNT,
+  canDiscardCard,
+  canSatisfyKittyDiscardRule,
   cloneGameState,
   completeRoundScore,
   createInitialGame,
   dealRound,
   getCardPower,
   getLeadColor,
+  isValidKittyDiscard,
   isValidMove,
   playerName,
   sortHand,
@@ -119,6 +123,15 @@ function canHumanPlayCard(state) {
   );
 }
 
+function getSelectedDiscardCards(state) {
+  const hand = state.hands[0] || [];
+  return state.discardSelection.map((index) => hand[index]).filter(Boolean);
+}
+
+function isHumanDiscardSelectionValid(state) {
+  return isValidKittyDiscard(state.hands[0] || [], getSelectedDiscardCards(state), state.trump);
+}
+
 function loadCompletedGames() {
   if (typeof window === "undefined") return [];
 
@@ -154,7 +167,7 @@ function normalizeSavedGame(savedGame) {
   const savedScores = savedGame.scores && typeof savedGame.scores === "object" ? savedGame.scores : {};
   const savedPointsTaken = savedGame.pointsTaken && typeof savedGame.pointsTaken === "object" ? savedGame.pointsTaken : {};
 
-  return cloneGameState({
+  const normalizedGame = cloneGameState({
     ...initialGame,
     ...savedGame,
     kitty: Array.isArray(savedGame.kitty) ? savedGame.kitty : initialGame.kitty,
@@ -178,6 +191,14 @@ function normalizeSavedGame(savedGame) {
     roundResult:
       savedGame.roundResult && typeof savedGame.roundResult === "object" ? { ...savedGame.roundResult } : initialGame.roundResult,
   });
+
+  if (normalizedGame.phase === "KITTY" && !normalizedGame.trump) {
+    normalizedGame.phase = "TRUMP";
+    normalizedGame.discardSelection = [];
+    normalizedGame.selectedCardIndex = -1;
+  }
+
+  return normalizedGame;
 }
 
 function loadActiveGame() {
@@ -459,7 +480,7 @@ export default function App() {
       nextState.kittyFaceUp = true;
       nextState.selectedCardIndex = -1;
       nextState.discardSelection = [];
-      nextState.phase = winner === 0 ? "KITTY" : "KITTY_WAIT";
+      nextState.phase = winner === 0 ? "TRUMP" : "KITTY_WAIT";
     });
 
     showToast(`${playerName(winner)} won bid at ${finalBid}`);
@@ -499,6 +520,9 @@ export default function App() {
     mutateGame((state) => {
       if (state.phase !== "KITTY") return;
 
+      const card = state.hands[0][index];
+      if (!canDiscardCard(card, state.hands[0], state.trump)) return;
+
       const existingIndex = state.discardSelection.indexOf(index);
       if (existingIndex >= 0) {
         state.discardSelection.splice(existingIndex, 1);
@@ -510,9 +534,11 @@ export default function App() {
 
   function confirmDiscard() {
     const state = gameRef.current;
-    if (state.phase !== "KITTY" || state.discardSelection.length !== DISCARD_COUNT) return;
+    if (state.phase !== "KITTY" || !isHumanDiscardSelectionValid(state)) return;
 
     mutateGame((nextState) => {
+      if (!isHumanDiscardSelectionValid(nextState)) return;
+
       const hand = [...nextState.hands[0]];
       const removed = [];
 
@@ -528,27 +554,38 @@ export default function App() {
       nextState.discardSelection = [];
       nextState.selectedCardIndex = -1;
       nextState.showKittyDisplay = false;
-      nextState.phase = "TRUMP";
+      nextState.phase = "PLAY";
+      nextState.currentTurn = 0;
     });
+
+    processTurn();
   }
 
   function humanSelectTrump(color) {
+    let didSelectTrump = false;
+
     mutateGame((state) => {
       if (state.phase !== "TRUMP") return;
+      if (!canSatisfyKittyDiscardRule(state.hands[0], color)) return;
 
       state.trump = color;
-      state.phase = "PLAY";
+      state.phase = "KITTY";
       state.currentTurn = 0;
+      state.discardSelection = [];
+      state.selectedCardIndex = -1;
+      didSelectTrump = true;
     });
 
+    if (!didSelectTrump) return;
+
     showToast(`Trump is ${color}`);
-    processTurn();
   }
 
   function selectHandCard(index, playable) {
     const state = gameRef.current;
 
     if (state.phase === "KITTY") {
+      if (!playable) return;
       toggleDiscard(index);
       return;
     }
@@ -801,7 +838,7 @@ export default function App() {
       {game.phase === "BID" && game.currentTurn === 0 && (
         <BidModal game={game} onBid={(amount) => submitBid(0, amount)} onPass={humanPass} />
       )}
-      {game.phase === "TRUMP" && <TrumpModal onSelectTrump={humanSelectTrump} />}
+      {game.phase === "TRUMP" && <TrumpModal game={game} onSelectTrump={humanSelectTrump} />}
       {game.phase === "KITTY" && <KittyModal game={game} onConfirmDiscard={confirmDiscard} />}
       {game.phase === "ROUND_END" && game.roundResult && (
         <RoundEndModal
@@ -967,8 +1004,10 @@ function Hand({ game, humanCanPlay, onCardClick }) {
         {hand.map((card, index) => {
           const isSelected = game.selectedCardIndex === index || (game.phase === "KITTY" && game.discardSelection.includes(index));
           const playable =
-            game.phase === "KITTY" ||
-            (humanCanPlay && isValidMove(card, hand, leadColor, game.trump));
+            game.phase === "KITTY"
+              ? canDiscardCard(card, hand, game.trump)
+              : humanCanPlay && isValidMove(card, hand, leadColor, game.trump);
+          const showUnplayable = !playable && (game.phase === "KITTY" || game.phase === "PLAY");
           const offset = index - center;
           const rotation = offset * 3;
           const yTranslate = Math.abs(offset) * 4;
@@ -977,7 +1016,7 @@ function Hand({ game, humanCanPlay, onCardClick }) {
             <CardView
               key={card.id}
               card={card}
-              className={`hand-card${isSelected ? " selected" : ""}${!playable && game.phase === "PLAY" ? " unplayable" : ""}`}
+              className={`hand-card${isSelected ? " selected" : ""}${showUnplayable ? " unplayable" : ""}`}
               onClick={(event) => {
                 event.stopPropagation();
                 onCardClick(index, playable);
@@ -1215,6 +1254,7 @@ function HowToPlayView() {
           remaining players.
         </p>
         <p>Follow the led color when you can. Trump beats other colors, and the Rook follows trump.</p>
+        <p>The bid winner cannot bury point cards unless trump cards are needed to complete the kitty discard.</p>
         <p>Hit your bid to score your points. Miss it and your team loses the bid amount.</p>
       </div>
     </>
@@ -1248,24 +1288,26 @@ function BidModal({ game, onBid, onPass }) {
   );
 }
 
-function TrumpModal({ onSelectTrump }) {
+function TrumpModal({ game, onSelectTrump }) {
   return (
     <Modal id="trump-modal">
       <div className="modal-card">
         <h2 className="modal-title">Choose Trump</h2>
         <div className="color-options">
-          <button className="btn-opt btn-red" type="button" onClick={() => onSelectTrump("Red")}>
-            RED
-          </button>
-          <button className="btn-opt btn-green" type="button" onClick={() => onSelectTrump("Green")}>
-            GREEN
-          </button>
-          <button className="btn-opt btn-black" type="button" onClick={() => onSelectTrump("Black")}>
-            BLACK
-          </button>
-          <button className="btn-opt btn-yellow" type="button" onClick={() => onSelectTrump("Yellow")}>
-            YELLOW
-          </button>
+          {COLORS.map((color) => {
+            const canUseTrump = canSatisfyKittyDiscardRule(game.hands[0], color);
+            return (
+              <button
+                className={`btn-opt btn-${color.toLowerCase()}`}
+                type="button"
+                key={color}
+                disabled={!canUseTrump}
+                onClick={() => onSelectTrump(color)}
+              >
+                {color.toUpperCase()}
+              </button>
+            );
+          })}
         </div>
       </div>
     </Modal>
@@ -1274,17 +1316,18 @@ function TrumpModal({ onSelectTrump }) {
 
 function KittyModal({ game, onConfirmDiscard }) {
   const selectedCount = game.discardSelection.length;
+  const canConfirm = isHumanDiscardSelectionValid(game);
 
   return (
     <Modal id="kitty-modal">
       <div className="modal-card kitty-card">
         <h2 className="modal-title">The Kitty</h2>
-        <p className="modal-subtitle">Tap 5 cards in your hand to discard.</p>
+        <p className="modal-subtitle">Discard 5 non-point cards. If needed, use trump cards.</p>
         <button
           className="btn-primary"
           id="confirm-discard-btn"
           type="button"
-          disabled={selectedCount !== DISCARD_COUNT}
+          disabled={!canConfirm}
           onClick={onConfirmDiscard}
         >
           CONFIRM ({selectedCount}/5)

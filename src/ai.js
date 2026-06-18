@@ -2,8 +2,13 @@ import {
   COLORS,
   DISCARD_COUNT,
   buildDeck,
+  canDiscardCard,
+  canSatisfyKittyDiscardRule,
+  getEffectiveColor,
   getCardPower,
   getLeadColor,
+  isTrumpCard,
+  isValidKittyDiscard,
   isValidMove,
   sortHand,
   teamForPlayer,
@@ -13,11 +18,11 @@ const MAX_BID = 150;
 const MIN_BID = 100;
 
 function effectiveColor(card, trump) {
-  return card.color === "ROOK" ? trump : card.color;
+  return getEffectiveColor(card, trump);
 }
 
 function isTrump(card, trump) {
-  return effectiveColor(card, trump) === trump;
+  return isTrumpCard(card, trump);
 }
 
 function cardLeadPower(card, trump) {
@@ -202,6 +207,27 @@ function evaluateKeptHand(keptCards, discardedCards, trump) {
   return base + discardPoints * 1.15 + keptPoints * 0.12 - trumpLossPenalty - riskyPointPenalty;
 }
 
+function createFallbackKittyPlan(fullHand) {
+  const trump = COLORS.find((color) => canSatisfyKittyDiscardRule(fullHand, color)) || COLORS[0];
+  const discards = [];
+
+  for (const card of fullHand) {
+    if (canDiscardCard(card, fullHand, trump)) {
+      discards.push(card);
+    }
+
+    if (discards.length === DISCARD_COUNT) break;
+  }
+
+  const discardIds = new Set(discards.map((card) => card.id));
+  return {
+    score: -Infinity,
+    trump,
+    discards,
+    hand: sortHand(fullHand.filter((card) => !discardIds.has(card.id))),
+  };
+}
+
 export function chooseBotKittyPlan(fullHand) {
   let bestPlan = null;
 
@@ -219,6 +245,10 @@ export function chooseBotKittyPlan(fullHand) {
         }
       });
 
+      if (!isValidKittyDiscard(fullHand, discardedCards, trump)) {
+        continue;
+      }
+
       const score = evaluateKeptHand(keptCards, discardedCards, trump);
 
       if (!bestPlan || score > bestPlan.score) {
@@ -232,7 +262,7 @@ export function chooseBotKittyPlan(fullHand) {
     }
   });
 
-  return bestPlan;
+  return bestPlan || createFallbackKittyPlan(fullHand);
 }
 
 function flattenCompletedTricks(game) {

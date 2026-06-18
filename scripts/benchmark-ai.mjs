@@ -5,6 +5,7 @@ import {
   completeRoundScore,
   getCardPower,
   getLeadColor,
+  isValidKittyDiscard,
   isValidMove,
   sortHand,
   teamForPlayer,
@@ -159,6 +160,10 @@ function runBidding(state, candidateTeam, stats) {
 function chooseKitty(state, winner, candidateTeam) {
   const strategy = getStrategy(winner, candidateTeam);
   const plan = strategy.chooseBotKittyPlan(state.hands[winner]);
+
+  if (!isValidKittyDiscard(state.hands[winner], plan.discards, plan.trump)) {
+    throw new Error(`Strategy ${strategyLabelForPlayer(winner, candidateTeam)} returned an illegal kitty discard.`);
+  }
 
   state.hands[winner] = plan.hand;
   state.kittyPoints = plan.discards.reduce((sum, card) => sum + card.value, 0);
