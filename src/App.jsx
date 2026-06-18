@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { chooseBotBid, chooseBotKittyPlan, chooseBotPlay } from "./ai.js";
 import {
   BID_START,
-  COLORS,
   DISCARD_COUNT,
   cloneGameState,
   completeRoundScore,
@@ -317,9 +317,7 @@ export default function App() {
     const state = gameRef.current;
     if (state.phase !== "BID" || state.currentTurn !== playerId) return;
 
-    const currentBid = state.bidInfo.highBid;
-    const shouldBid = currentBid < 120 && Math.random() > 0.3;
-    submitBid(playerId, shouldBid ? currentBid + 5 : 0);
+    submitBid(playerId, chooseBotBid(state, playerId, BID_MAX));
   }
 
   function submitBid(playerId, amount) {
@@ -367,21 +365,11 @@ export default function App() {
       let chosenTrump = "Red";
 
       mutateGame((nextState) => {
-        const handByLowValue = [...nextState.hands[winner]].sort((a, b) => a.value - b.value);
-        const discards = handByLowValue.splice(0, DISCARD_COUNT);
-        const colorCounts = {};
+        const plan = chooseBotKittyPlan(nextState.hands[winner]);
+        const discards = plan.discards;
+        chosenTrump = plan.trump;
 
-        handByLowValue.forEach((card) => {
-          if (card.color !== "ROOK") {
-            colorCounts[card.color] = (colorCounts[card.color] || 0) + 1;
-          }
-        });
-
-        chosenTrump = COLORS.reduce((bestColor, color) => {
-          return (colorCounts[color] || 0) > (colorCounts[bestColor] || 0) ? color : bestColor;
-        }, "Red");
-
-        nextState.hands[winner] = sortHand(handByLowValue);
+        nextState.hands[winner] = plan.hand;
         nextState.kittyPoints = discards.reduce((sum, card) => sum + card.value, 0);
         nextState.showKittyDisplay = false;
         nextState.trump = chosenTrump;
@@ -483,15 +471,7 @@ export default function App() {
     const state = gameRef.current;
     if (state.phase !== "PLAY" || state.currentTurn !== playerId) return;
 
-    const hand = state.hands[playerId];
-    const leadColor = getLeadColor(state.currentTrick, state.trump);
-    let candidates = hand.filter((card) => isValidMove(card, hand, leadColor, state.trump));
-
-    if (candidates.length === 0) {
-      candidates = hand;
-    }
-
-    const choice = candidates[0];
+    const choice = chooseBotPlay(state, playerId);
     if (!choice) return;
 
     mutateGame((nextState) => {
@@ -546,6 +526,7 @@ export default function App() {
       let completedGame = null;
 
       mutateGame((nextState) => {
+        nextState.tricks.push(nextState.currentTrick.map((play) => ({ ...play })));
         nextState.currentTrick = [];
         nextState.collectingWinner = null;
         nextState.currentTurn = winner;

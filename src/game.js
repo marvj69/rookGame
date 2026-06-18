@@ -61,7 +61,7 @@ export function cloneGameState(state) {
       ...state.bidInfo,
       passed: [...state.bidInfo.passed],
     },
-    tricks: [...state.tricks],
+    tricks: state.tricks.map((trick) => trick.map((play) => ({ ...play }))),
     roundsCompleted: state.roundsCompleted,
     currentTrick: state.currentTrick.map((play) => ({ ...play })),
     pointsTaken: { ...state.pointsTaken },
