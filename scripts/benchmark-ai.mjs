@@ -38,10 +38,10 @@ function splitRanges(gamesPerSide, workerCount) {
   return ranges;
 }
 
-function runWorker({ startIndex, gamesPerSide, seed }) {
+function runWorker({ startIndex, gamesPerSide, seed, options }) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("./ai-benchmark-worker.mjs", import.meta.url), {
-      workerData: { startIndex, gamesPerSide, seed },
+      workerData: { startIndex, gamesPerSide, seed, options },
     });
 
     worker.on("message", (message) => {
@@ -60,10 +60,10 @@ function runWorker({ startIndex, gamesPerSide, seed }) {
   });
 }
 
-async function runParallelBenchmark({ seed, gamesPerSide, workerCount }) {
+async function runParallelBenchmark({ seed, gamesPerSide, workerCount, benchmarkOptions }) {
   const total = createBenchmarkTotal();
   const ranges = splitRanges(gamesPerSide, workerCount);
-  const results = await Promise.all(ranges.map((range) => runWorker({ ...range, seed })));
+  const results = await Promise.all(ranges.map((range) => runWorker({ ...range, seed, options: benchmarkOptions })));
 
   results
     .sort((a, b) => a.startIndex - b.startIndex)
@@ -79,11 +79,12 @@ const workerCount = resolveWorkerCount(options.workerCount, options.gamesPerSide
 const startedAt = performance.now();
 const total =
   workerCount > 1
-    ? await runParallelBenchmark({ ...options, workerCount })
+    ? await runParallelBenchmark({ ...options, workerCount, benchmarkOptions: options })
     : simulateBenchmarkRange({
         seed: options.seed,
         gamesPerSide: options.gamesPerSide,
         strategies: { candidateAi, baselineAi },
+        options,
       });
 const elapsedMs = performance.now() - startedAt;
 
@@ -92,8 +93,10 @@ console.log(
     total,
     seed: options.seed,
     mode: options.mode,
+    candidateMode: options.candidateMode,
     gamesPerSide: options.gamesPerSide,
     elapsedMs,
     workerCount,
+    search: options.search,
   }).join("\n"),
 );

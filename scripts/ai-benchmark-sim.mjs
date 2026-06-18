@@ -10,6 +10,7 @@ import {
   sortHand,
   teamForPlayer,
 } from "../src/game.js";
+import { evaluateSampledPlayCandidates } from "../src/ai/search.js";
 
 const TARGET_SCORE = 500;
 const MAX_BID = 150;
@@ -30,18 +31,23 @@ function hasFlag(args, name) {
   return args.includes(`--${name}`);
 }
 
-function getArgNumber(args, name, fallback) {
+function getArgNumber(args, name, fallback, min = 1) {
   const rawValue = getArgValue(args, name);
   if (rawValue === null) return fallback;
   const value = Number(rawValue);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
+  return Number.isFinite(value) && value >= min ? value : fallback;
 }
 
 export function parseBenchmarkArgs(args = process.argv.slice(2)) {
   const mode = getArgValue(args, "mode") ?? (hasFlag(args, "quick") ? "quick" : hasFlag(args, "full") ? "full" : "standard");
+  const candidateMode = getArgValue(args, "candidate") ?? (hasFlag(args, "play-search") ? "search" : "current");
 
   if (!Object.hasOwn(BENCHMARK_MODE_DEFAULT_GAMES, mode)) {
     throw new Error(`Unsupported benchmark mode "${mode}". Use "quick", "standard", or "full".`);
+  }
+
+  if (!["current", "search"].includes(candidateMode)) {
+    throw new Error(`Unsupported candidate mode "${candidateMode}". Use "current" or "search".`);
   }
 
   const requestedGamesPerSide = getArgNumber(args, "games", null);
@@ -49,9 +55,17 @@ export function parseBenchmarkArgs(args = process.argv.slice(2)) {
 
   return {
     mode,
+    candidateMode,
     gamesPerSide: requestedGamesPerSide ?? BENCHMARK_MODE_DEFAULT_GAMES[mode],
     seed: getArgNumber(args, "seed", 20260618),
     workerCount: requestedWorkers ?? (hasFlag(args, "parallel") || mode === "full" ? "auto" : 1),
+    search: {
+      timeLimitMs: getArgNumber(args, "search-ms", 25, 0),
+      samples: getArgNumber(args, "search-samples", 4),
+      seed: getArgNumber(args, "search-seed", 424242),
+      minSamples: getArgNumber(args, "search-min-samples", 1, 0),
+      maxSampleAttempts: getArgNumber(args, "search-sample-attempts", 40),
+    },
   };
 }
 
@@ -112,6 +126,13 @@ function createStats() {
     decisionRuntimeMs: { candidate: 0, baseline: 0 },
     decisionKinds: { bid: 0, kitty: 0, play: 0 },
     decisionKindRuntimeMs: { bid: 0, kitty: 0, play: 0 },
+    search: {
+      decisions: 0,
+      fallbacks: 0,
+      samples: 0,
+      runtimeMs: 0,
+      timeouts: 0,
+    },
     illegalMoves: 0,
   };
 }
@@ -133,6 +154,68 @@ function measureDecision(stats, label, kind, callback) {
 function failIllegal(stats, message) {
   stats.illegalMoves += 1;
   throw new Error(message);
+}
+
+function createPublicSearchView(state, playerId) {
+  return {
+    ...state,
+    hands: state.hands.map((hand, handPlayerId) => {
+      if (handPlayerId === playerId) return [...hand];
+      return new Array(hand.length);
+    }),
+    bidInfo: {
+      ...state.bidInfo,
+      passed: [...state.bidInfo.passed],
+    },
+    tricks: state.tricks.map((trick) => trick.map((play) => ({ ...play }))),
+    currentTrick: state.currentTrick.map((play) => ({ ...play })),
+    pointsTaken: { ...state.pointsTaken },
+    settings: { ...state.settings },
+  };
+}
+
+function shouldUseSearchForPlay(label, options) {
+  return label === "candidate" && options.candidateMode === "search";
+}
+
+function choosePlayCard(state, playerId, candidateTeam, stats, strategies, options) {
+  const label = strategyLabelForPlayer(playerId, candidateTeam);
+  const strategy = getStrategy(playerId, candidateTeam, strategies);
+
+  if (!shouldUseSearchForPlay(label, options)) {
+    return strategy.chooseBotPlay(state, playerId);
+  }
+
+  const searchSeed =
+    state.searchContext.baseSeed +
+    state.searchContext.decisionIndex * 1009 +
+    stats.rounds * 9176 +
+    playerId * 193 +
+    state.currentTrick.length * 31;
+  state.searchContext.decisionIndex += 1;
+  const result = evaluateSampledPlayCandidates(createPublicSearchView(state, playerId), playerId, {
+    seed: searchSeed,
+    samples: options.search.samples,
+    minSamples: options.search.minSamples,
+    timeLimitMs: options.search.timeLimitMs,
+    maxSampleAttempts: options.search.maxSampleAttempts,
+    policy: strategy.chooseBotPlay,
+    fallbackCard: strategy.chooseBotPlay(state, playerId),
+  });
+
+  stats.search.decisions += 1;
+  stats.search.samples += result.samplesUsed;
+  stats.search.runtimeMs += result.elapsedMs;
+
+  if (result.usedFallback) {
+    stats.search.fallbacks += 1;
+  }
+
+  if (result.elapsedMs >= options.search.timeLimitMs && result.samplesUsed < options.search.samples) {
+    stats.search.timeouts += 1;
+  }
+
+  return result.card;
 }
 
 function createGame(seed) {
@@ -248,13 +331,14 @@ function chooseKitty(state, winner, candidateTeam, stats, strategies) {
   state.currentTurn = winner;
 }
 
-function playCard(state, playerId, candidateTeam, stats, strategies) {
-  const strategy = getStrategy(playerId, candidateTeam, strategies);
+function playCard(state, playerId, candidateTeam, stats, strategies, options) {
   const label = strategyLabelForPlayer(playerId, candidateTeam);
   const hand = state.hands[playerId];
   const leadColor = getLeadColor(state.currentTrick, state.trump);
   const validCards = hand.filter((card) => isValidMove(card, hand, leadColor, state.trump));
-  const choice = measureDecision(stats, label, "play", () => strategy.chooseBotPlay(state, playerId));
+  const choice = measureDecision(stats, label, "play", () =>
+    choosePlayCard(state, playerId, candidateTeam, stats, strategies, options),
+  );
 
   if (!choice) failIllegal(stats, `Strategy ${label} returned no card.`);
 
@@ -296,13 +380,13 @@ function resolveTrick(state) {
   state.currentTurn = winner;
 }
 
-function playRound(state, candidateTeam, stats, strategies) {
+function playRound(state, candidateTeam, stats, strategies, options) {
   const bidder = runBidding(state, candidateTeam, stats, strategies);
   chooseKitty(state, bidder, candidateTeam, stats, strategies);
 
   while (state.hands[0].length > 0) {
     while (state.currentTrick.length < 4) {
-      playCard(state, state.currentTurn, candidateTeam, stats, strategies);
+      playCard(state, state.currentTurn, candidateTeam, stats, strategies, options);
     }
 
     resolveTrick(state);
@@ -326,16 +410,20 @@ function playRound(state, candidateTeam, stats, strategies) {
   stats.roundScore.baseline += roundScore.scoreChange[candidateTeam === "us" ? "them" : "us"];
 }
 
-function simulateGame(seed, candidateTeam, strategies) {
+function simulateGame(seed, candidateTeam, strategies, options) {
   const game = createGame(seed);
   const stats = createStats();
+  game.state.searchContext = {
+    baseSeed: options.search.seed + seed * 37 + (candidateTeam === "us" ? 0 : 1_000_003),
+    decisionIndex: 0,
+  };
 
   while (
     Math.max(game.state.scores.us, game.state.scores.them) < TARGET_SCORE &&
     stats.rounds < MAX_ROUNDS_PER_GAME
   ) {
     prepareRound(game);
-    playRound(game.state, candidateTeam, stats, strategies);
+    playRound(game.state, candidateTeam, stats, strategies, options);
   }
 
   const candidateScore = game.state.scores[candidateTeam];
@@ -373,6 +461,11 @@ function mergeStats(total, next) {
   total.decisionKindRuntimeMs.bid += next.decisionKindRuntimeMs.bid;
   total.decisionKindRuntimeMs.kitty += next.decisionKindRuntimeMs.kitty;
   total.decisionKindRuntimeMs.play += next.decisionKindRuntimeMs.play;
+  total.search.decisions += next.search.decisions;
+  total.search.fallbacks += next.search.fallbacks;
+  total.search.samples += next.search.samples;
+  total.search.runtimeMs += next.search.runtimeMs;
+  total.search.timeouts += next.search.timeouts;
   total.illegalMoves += next.illegalMoves;
 }
 
@@ -397,13 +490,14 @@ export function mergeBenchmarkTotals(total, next) {
   return total;
 }
 
-export function simulateBenchmarkRange({ startIndex = 0, gamesPerSide, seed, strategies }) {
+export function simulateBenchmarkRange({ startIndex = 0, gamesPerSide, seed, strategies, options }) {
   const total = createBenchmarkTotal();
+  const benchmarkOptions = options ?? parseBenchmarkArgs([]);
 
   for (let index = startIndex; index < startIndex + gamesPerSide; index += 1) {
     for (const candidateTeam of ["us", "them"]) {
       const gameSeed = seed + index * 97;
-      const result = simulateGame(gameSeed, candidateTeam, strategies);
+      const result = simulateGame(gameSeed, candidateTeam, strategies, benchmarkOptions);
       total.games += 1;
       total.wins += result.candidateWon ? 1 : 0;
       total.margin += result.margin;
@@ -414,15 +508,22 @@ export function simulateBenchmarkRange({ startIndex = 0, gamesPerSide, seed, str
   return total;
 }
 
-export function formatBenchmarkSummary({ total, seed, mode, gamesPerSide, elapsedMs, workerCount }) {
+export function formatBenchmarkSummary({ total, seed, mode, candidateMode, gamesPerSide, elapsedMs, workerCount, search }) {
   const candidateBidDecisions = total.stats.madeBids.candidate + total.stats.failedBids.candidate;
   const baselineBidDecisions = total.stats.madeBids.baseline + total.stats.failedBids.baseline;
   const totalDecisions = total.stats.decisions.candidate + total.stats.decisions.baseline;
   const totalDecisionRuntimeMs = total.stats.decisionRuntimeMs.candidate + total.stats.decisionRuntimeMs.baseline;
+  const averageSamplesPerSearchDecision =
+    total.stats.search.decisions > 0 ? total.stats.search.samples / total.stats.search.decisions : 0;
+  const averageSearchMsPerDecision =
+    total.stats.search.decisions > 0 ? total.stats.search.runtimeMs / total.stats.search.decisions : 0;
+  const searchFallbackRate =
+    total.stats.search.decisions > 0 ? pct(total.stats.search.fallbacks, total.stats.search.decisions) : "0.0%";
 
   return [
     `AI benchmark seed: ${seed}`,
     `Benchmark mode: ${mode}`,
+    `Candidate mode: ${candidateMode}`,
     `Workers: ${workerCount}`,
     `Games per orientation: ${gamesPerSide}`,
     `Total games: ${total.games}`,
@@ -445,6 +546,13 @@ export function formatBenchmarkSummary({ total, seed, mode, gamesPerSide, elapse
     `Decision type runtime: bid ${total.stats.decisionKindRuntimeMs.bid.toFixed(1)} ms, kitty ${total.stats.decisionKindRuntimeMs.kitty.toFixed(
       1,
     )} ms, play ${total.stats.decisionKindRuntimeMs.play.toFixed(1)} ms`,
+    `Search config: time ${search.timeLimitMs} ms, max samples ${search.samples}, seed ${search.seed}, min samples ${search.minSamples}`,
+    `Search decisions: ${total.stats.search.decisions}`,
+    `Search fallback decisions: ${total.stats.search.fallbacks} (${searchFallbackRate})`,
+    `Search samples evaluated: ${total.stats.search.samples}`,
+    `Average search samples/decision: ${averageSamplesPerSearchDecision.toFixed(2)}`,
+    `Average search ms/decision: ${averageSearchMsPerDecision.toFixed(2)}`,
+    `Search timeout count: ${total.stats.search.timeouts}`,
     `Elapsed time: ${elapsedMs.toFixed(1)} ms`,
     `Average runtime: ${(elapsedMs / total.games).toFixed(2)} ms/game, ${(totalDecisionRuntimeMs / totalDecisions).toFixed(
       4,

@@ -9,6 +9,7 @@ try {
     gamesPerSide: workerData.gamesPerSide,
     seed: workerData.seed,
     strategies: { candidateAi, baselineAi },
+    options: workerData.options,
   });
 
   parentPort.postMessage({ ok: true, startIndex: workerData.startIndex, total });

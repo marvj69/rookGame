@@ -34,20 +34,22 @@ Non-negotiables:
 
 ## Phase 2 - Build an Imperfect-Information Model
 
-- [ ] Create a belief-state module, likely `src/ai/belief.js`, that derives known cards, unseen cards, known voids, possible voids, and team context from public game state.
-- [ ] Generate random hidden-hand assignments consistent with observed cards and known voids.
-- [ ] Add validation that generated hidden deals preserve hand sizes, card uniqueness, follow-suit evidence, and current public trick state.
-- [ ] Add tests using fixed trick histories where specific players must be void in specific colors.
-- [ ] Acceptance: sampled deals are legal, deterministic under a seed, and do not include cards known to be in the acting player's hand or already played.
+- [x] Create a belief-state module, likely `src/ai/belief.js`, that derives known cards, unseen cards, known voids, possible voids, and team context from public game state.
+- [x] Generate random hidden-hand assignments consistent with observed cards and known voids.
+- [x] Add validation that generated hidden deals preserve hand sizes, card uniqueness, follow-suit evidence, and current public trick state.
+- [x] Add tests using fixed trick histories where specific players must be void in specific colors.
+- [x] Acceptance: sampled deals are legal, deterministic under a seed, and do not include cards known to be in the acting player's hand or already played.
 
 ## Phase 3 - Add Time-Boxed Search for Play Decisions
 
-- [ ] Create a search module, likely `src/ai/search.js`, that evaluates each legal card using sampled hidden deals.
-- [ ] Start with Monte Carlo rollouts using the existing heuristic policy as the rollout policy.
+- [x] Create a search module, likely `src/ai/search.js`, that evaluates each legal card using sampled hidden deals.
+- [x] Start with Monte Carlo rollouts using the existing heuristic policy as the rollout policy.
 - [ ] Add exact endgame search when the remaining card count is small enough.
 - [ ] Score outcomes by round EV: made/missed bid, point swing, set potential, and current score context.
-- [ ] Keep a strict decision budget, for example 50-150 ms in live browser play and larger budgets in benchmarks.
-- [ ] Return the current heuristic choice when search has too little time or too few valid samples.
+- [x] Keep a strict decision budget, for example 50-150 ms in live browser play and larger budgets in benchmarks.
+- [x] Return the current heuristic choice when search has too little time or too few valid samples.
+- [x] Add benchmark-only sampled-search candidate mode with search metrics and no live browser integration.
+- [x] Add regression coverage proving hidden opponent card mutations do not change sampled-search output for the same public state and seed.
 - [ ] Acceptance: search never blocks the UI, never returns illegal cards, and beats the current baseline over a fixed full benchmark suite.
 
 ## Phase 4 - Upgrade Bidding and Kitty with Rollout EV
@@ -78,10 +80,10 @@ Non-negotiables:
 
 - [ ] Keep `src/ai.js` as the public compatibility facade.
 - [ ] Consider moving existing heuristic helpers into `src/ai/heuristics.js`.
-- [ ] Add `src/ai/belief.js` for public-state inference and sampled hidden deals.
-- [ ] Add `src/ai/search.js` for Monte Carlo and endgame search.
+- [x] Add `src/ai/belief.js` for public-state inference and sampled hidden deals.
+- [x] Add `src/ai/search.js` for Monte Carlo and endgame search.
 - [ ] Add `src/ai/evaluation.js` for scoring functions and tunable weights.
-- [ ] Add `scripts/ai-benchmark-worker.mjs` if benchmark parallelism uses worker threads.
+- [x] Add `scripts/ai-benchmark-worker.mjs` if benchmark parallelism uses worker threads.
 - [ ] Add `scripts/ai-tournament.mjs` for config-vs-config comparison.
 
 ## Definition of Working Correctly
