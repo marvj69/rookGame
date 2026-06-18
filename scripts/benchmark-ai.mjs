@@ -10,7 +10,7 @@ import {
   sortHand,
   teamForPlayer,
 } from "../src/game.js";
-import * as legacyAi from "./legacy-ai.mjs";
+import * as baselineAi from "./current-ai-baseline.mjs";
 
 const TARGET_SCORE = 500;
 const MAX_BID = 150;
@@ -61,11 +61,11 @@ function dealRound(random) {
 }
 
 function strategyLabelForPlayer(playerId, candidateTeam) {
-  return teamForPlayer(playerId) === candidateTeam ? "candidate" : "legacy";
+  return teamForPlayer(playerId) === candidateTeam ? "candidate" : "baseline";
 }
 
 function getStrategy(playerId, candidateTeam) {
-  return strategyLabelForPlayer(playerId, candidateTeam) === "candidate" ? candidateAi : legacyAi;
+  return strategyLabelForPlayer(playerId, candidateTeam) === "candidate" ? candidateAi : baselineAi;
 }
 
 function createGame(seed) {
@@ -245,18 +245,18 @@ function playRound(state, candidateTeam, stats) {
 
   stats.rounds += 1;
   stats.roundScore.candidate += roundScore.scoreChange[candidateTeam];
-  stats.roundScore.legacy += roundScore.scoreChange[candidateTeam === "us" ? "them" : "us"];
+  stats.roundScore.baseline += roundScore.scoreChange[candidateTeam === "us" ? "them" : "us"];
 }
 
 function simulateGame(seed, candidateTeam) {
   const game = createGame(seed);
   const stats = {
     rounds: 0,
-    bids: { candidate: 0, legacy: 0 },
-    roundBids: { candidate: 0, legacy: 0 },
-    madeBids: { candidate: 0, legacy: 0 },
-    failedBids: { candidate: 0, legacy: 0 },
-    roundScore: { candidate: 0, legacy: 0 },
+    bids: { candidate: 0, baseline: 0 },
+    roundBids: { candidate: 0, baseline: 0 },
+    madeBids: { candidate: 0, baseline: 0 },
+    failedBids: { candidate: 0, baseline: 0 },
+    roundScore: { candidate: 0, baseline: 0 },
   };
 
   while (
@@ -268,14 +268,14 @@ function simulateGame(seed, candidateTeam) {
   }
 
   const candidateScore = game.state.scores[candidateTeam];
-  const legacyScore = game.state.scores[candidateTeam === "us" ? "them" : "us"];
+  const baselineScore = game.state.scores[candidateTeam === "us" ? "them" : "us"];
 
   return {
     candidateTeam,
     candidateScore,
-    legacyScore,
-    candidateWon: candidateScore > legacyScore,
-    margin: candidateScore - legacyScore,
+    baselineScore,
+    candidateWon: candidateScore > baselineScore,
+    margin: candidateScore - baselineScore,
     stats,
   };
 }
@@ -283,15 +283,15 @@ function simulateGame(seed, candidateTeam) {
 function mergeStats(total, next) {
   total.rounds += next.rounds;
   total.bids.candidate += next.bids.candidate;
-  total.bids.legacy += next.bids.legacy;
+  total.bids.baseline += next.bids.baseline;
   total.roundBids.candidate += next.roundBids.candidate;
-  total.roundBids.legacy += next.roundBids.legacy;
+  total.roundBids.baseline += next.roundBids.baseline;
   total.madeBids.candidate += next.madeBids.candidate;
-  total.madeBids.legacy += next.madeBids.legacy;
+  total.madeBids.baseline += next.madeBids.baseline;
   total.failedBids.candidate += next.failedBids.candidate;
-  total.failedBids.legacy += next.failedBids.legacy;
+  total.failedBids.baseline += next.failedBids.baseline;
   total.roundScore.candidate += next.roundScore.candidate;
-  total.roundScore.legacy += next.roundScore.legacy;
+  total.roundScore.baseline += next.roundScore.baseline;
 }
 
 function pct(numerator, denominator) {
@@ -306,11 +306,11 @@ const total = {
   margin: 0,
   stats: {
     rounds: 0,
-    bids: { candidate: 0, legacy: 0 },
-    roundBids: { candidate: 0, legacy: 0 },
-    madeBids: { candidate: 0, legacy: 0 },
-    failedBids: { candidate: 0, legacy: 0 },
-    roundScore: { candidate: 0, legacy: 0 },
+    bids: { candidate: 0, baseline: 0 },
+    roundBids: { candidate: 0, baseline: 0 },
+    madeBids: { candidate: 0, baseline: 0 },
+    failedBids: { candidate: 0, baseline: 0 },
+    roundScore: { candidate: 0, baseline: 0 },
   },
 };
 
@@ -326,7 +326,7 @@ for (let index = 0; index < gamesPerSide; index += 1) {
 }
 
 const candidateBidDecisions = total.stats.madeBids.candidate + total.stats.failedBids.candidate;
-const legacyBidDecisions = total.stats.madeBids.legacy + total.stats.failedBids.legacy;
+const baselineBidDecisions = total.stats.madeBids.baseline + total.stats.failedBids.baseline;
 
 console.log(`AI benchmark seed: ${seed}`);
 console.log(`Games per orientation: ${gamesPerSide}`);
@@ -335,16 +335,16 @@ console.log(`Candidate wins: ${total.wins}/${total.games} (${pct(total.wins, tot
 console.log(`Average final margin: ${(total.margin / total.games).toFixed(1)} points`);
 console.log(`Rounds played: ${total.stats.rounds}`);
 console.log(
-  `Round score average: candidate ${(total.stats.roundScore.candidate / total.stats.rounds).toFixed(1)}, legacy ${(
-    total.stats.roundScore.legacy / total.stats.rounds
+  `Round score average: candidate ${(total.stats.roundScore.candidate / total.stats.rounds).toFixed(1)}, baseline ${(
+    total.stats.roundScore.baseline / total.stats.rounds
   ).toFixed(1)}`,
 );
 console.log(
-  `Bids won: candidate ${total.stats.roundBids.candidate}, legacy ${total.stats.roundBids.legacy}`,
+  `Bids won: candidate ${total.stats.roundBids.candidate}, baseline ${total.stats.roundBids.baseline}`,
 );
 console.log(
-  `Bid make rate: candidate ${pct(total.stats.madeBids.candidate, candidateBidDecisions)}, legacy ${pct(
-    total.stats.madeBids.legacy,
-    legacyBidDecisions,
+  `Bid make rate: candidate ${pct(total.stats.madeBids.candidate, candidateBidDecisions)}, baseline ${pct(
+    total.stats.madeBids.baseline,
+    baselineBidDecisions,
   )}`,
 );

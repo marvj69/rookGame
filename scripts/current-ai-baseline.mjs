@@ -12,7 +12,7 @@ import {
   isValidMove,
   sortHand,
   teamForPlayer,
-} from "./game.js";
+} from "../src/game.js";
 
 const MAX_BID = 150;
 const MIN_BID = 100;
@@ -377,13 +377,6 @@ function sortPressureLeads(cards, trump) {
   });
 }
 
-function getValidCardsForPlayer(game, playerId) {
-  const hand = game.hands[playerId];
-  const leadColor = getLeadColor(game.currentTrick, game.trump);
-  const validCards = hand.filter((card) => isValidMove(card, hand, leadColor, game.trump));
-  return validCards.length > 0 ? validCards : hand;
-}
-
 function chooseLeadCard(game, playerId, candidates) {
   const trump = game.trump;
   const playerTeam = teamForPlayer(playerId);
@@ -482,157 +475,6 @@ function chooseFollowingCard(game, playerId, candidates) {
   return sortSmallestWinner(winningCards, game)[0];
 }
 
-function cloneGameForProjection(game) {
-  return {
-    ...game,
-    hands: game.hands.map((hand) => [...hand]),
-    bidInfo: {
-      ...game.bidInfo,
-      passed: [...game.bidInfo.passed],
-    },
-    tricks: game.tricks.map((trick) => trick.map((play) => ({ ...play }))),
-    currentTrick: game.currentTrick.map((play) => ({ ...play })),
-    pointsTaken: { ...game.pointsTaken },
-  };
-}
-
-function chooseProjectedFollowerCard(projectedGame, playerId) {
-  const candidates = getValidCardsForPlayer(projectedGame, playerId);
-
-  if (candidates.length <= 1) return candidates[0] ?? null;
-  return chooseFollowingCard(projectedGame, playerId, candidates);
-}
-
-function resolveProjectedTrick(currentTrick, trump) {
-  const leadColor = getLeadColor(currentTrick, trump);
-  let bestIndex = 0;
-  let bestPower = getCardPower(currentTrick[0].card, trump, leadColor);
-  let points = 0;
-
-  currentTrick.forEach((play, index) => {
-    points += play.card.value;
-
-    if (index === 0) return;
-
-    const power = getCardPower(play.card, trump, leadColor);
-    if (power > bestPower) {
-      bestPower = power;
-      bestIndex = index;
-    }
-  });
-
-  return {
-    points,
-    winner: currentTrick[bestIndex].pid,
-  };
-}
-
-function projectTrickAfterCard(game, playerId, card) {
-  const projectedGame = cloneGameForProjection(game);
-  const firstCardIndex = projectedGame.hands[playerId].findIndex((heldCard) => heldCard.id === card.id);
-
-  if (firstCardIndex < 0) return null;
-
-  projectedGame.hands[playerId].splice(firstCardIndex, 1);
-  projectedGame.currentTrick.push({ pid: playerId, card });
-  projectedGame.currentTurn = (playerId + 1) % 4;
-
-  while (projectedGame.currentTrick.length < 4) {
-    const nextPlayerId = projectedGame.currentTurn;
-    const nextCard = chooseProjectedFollowerCard(projectedGame, nextPlayerId);
-
-    if (!nextCard) return null;
-
-    const nextCardIndex = projectedGame.hands[nextPlayerId].findIndex((heldCard) => heldCard.id === nextCard.id);
-    if (nextCardIndex < 0) return null;
-
-    projectedGame.hands[nextPlayerId].splice(nextCardIndex, 1);
-    projectedGame.currentTrick.push({ pid: nextPlayerId, card: nextCard });
-    projectedGame.currentTurn = (nextPlayerId + 1) % 4;
-  }
-
-  const result = resolveProjectedTrick(projectedGame.currentTrick, projectedGame.trump);
-  return {
-    ...result,
-    handsAfterTrick: projectedGame.hands,
-  };
-}
-
-function remainingHandPoints(hands) {
-  return hands.flat().reduce((sum, card) => sum + card.value, 0);
-}
-
-function cardSpendPenalty(card, trump, wonTrick) {
-  let penalty = wonTrick ? card.value * 0.06 : card.value * 0.85;
-
-  if (isTrump(card, trump)) {
-    const trumpPower = cardLeadPower(card, trump) - 500;
-    penalty += 2 + Math.max(0, trumpPower - 10) * 0.6;
-  } else if (card.rank === 14) {
-    penalty += 1.5;
-  } else if (card.rank === 13) {
-    penalty += 0.8;
-  }
-
-  return penalty;
-}
-
-function scoreProjectedCard(game, playerId, card, projection) {
-  const playerTeam = teamForPlayer(playerId);
-  const winningTeam = teamForPlayer(projection.winner);
-  const bidTeam = teamForPlayer(getTeamBidder(game));
-  const bid = Math.max(MIN_BID, game.bidInfo.highBid || MIN_BID);
-  const bidTeamPointsBefore = game.pointsTaken[bidTeam] + game.kittyPoints;
-  const bidTeamPointsAfter = bidTeamPointsBefore + (winningTeam === bidTeam ? projection.points : 0);
-  const maxBidTeamPointsAfter = bidTeamPointsAfter + remainingHandPoints(projection.handsAfterTrick);
-  const wonTrick = winningTeam === playerTeam;
-
-  let score = wonTrick ? 4 : -4;
-  score += wonTrick ? projection.points * 1.7 : -projection.points * 1.7;
-
-  if (winningTeam === bidTeam) {
-    score += playerTeam === bidTeam ? projection.points * 1.0 : -projection.points * 1.25;
-  } else {
-    score += playerTeam === bidTeam ? -projection.points * 1.1 : projection.points * 1.05;
-  }
-
-  if (bidTeamPointsBefore < bid && bidTeamPointsAfter >= bid) {
-    score += playerTeam === bidTeam ? 28 : -28;
-  }
-
-  if (maxBidTeamPointsAfter < bid) {
-    score += playerTeam === bidTeam ? -70 : 70;
-  }
-
-  return score - cardSpendPenalty(card, game.trump, wonTrick);
-}
-
-function chooseProjectedCard(game, playerId, candidates, fallbackCard) {
-  let bestProjection = null;
-  let fallbackProjection = null;
-
-  candidates.forEach((card) => {
-    const projection = projectTrickAfterCard(game, playerId, card);
-    if (!projection) return;
-
-    const score = scoreProjectedCard(game, playerId, card, projection);
-    const candidateProjection = { card, score };
-
-    if (!bestProjection || score > bestProjection.score) {
-      bestProjection = candidateProjection;
-    }
-
-    if (fallbackCard && card.id === fallbackCard.id) {
-      fallbackProjection = candidateProjection;
-    }
-  });
-
-  if (!bestProjection) return fallbackCard;
-  if (!fallbackProjection) return bestProjection.card;
-
-  return bestProjection.score >= fallbackProjection.score + 2.5 ? bestProjection.card : fallbackCard;
-}
-
 export function chooseBotPlay(game, playerId) {
   const hand = game.hands[playerId];
   const leadColor = getLeadColor(game.currentTrick, game.trump);
@@ -645,12 +487,10 @@ export function chooseBotPlay(game, playerId) {
   if (candidates.length <= 1) return candidates[0] ?? null;
 
   if (game.currentTrick.length === 0) {
-    const fallbackCard = chooseLeadCard(game, playerId, candidates);
-    return chooseProjectedCard(game, playerId, candidates, fallbackCard);
+    return chooseLeadCard(game, playerId, candidates);
   }
 
-  const fallbackCard = chooseFollowingCard(game, playerId, candidates);
-  return chooseProjectedCard(game, playerId, candidates, fallbackCard);
+  return chooseFollowingCard(game, playerId, candidates);
 }
 
 export function describeAiHandStrength(hand) {
