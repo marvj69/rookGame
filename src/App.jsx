@@ -17,6 +17,8 @@ import {
 
 const BID_MAX = 150;
 const TARGET_SCORE = 500;
+const TRICK_SIZE = 4;
+const PLAYER_COUNT = 4;
 const COMPLETED_GAMES_STORAGE_KEY = "rook.completedGames";
 const ACTIVE_GAME_STORAGE_KEY = "rook.activeGame:v1";
 const ACTIVE_GAME_STORAGE_VERSION = 1;
@@ -53,8 +55,8 @@ function prepareRoundState(state) {
     bidder: null,
     passed: [false, false, false, false],
   };
-  state.dealer = (state.dealer + 1) % 4;
-  state.currentTurn = (state.dealer + 1) % 4;
+  state.dealer = (state.dealer + 1) % PLAYER_COUNT;
+  state.currentTurn = (state.dealer + 1) % PLAYER_COUNT;
   state.phase = "BID";
   state.selectedCardIndex = -1;
   state.discardSelection = [];
@@ -108,6 +110,15 @@ function getBidOptions(highBid) {
   return options;
 }
 
+function canHumanPlayCard(state) {
+  return (
+    state.phase === "PLAY" &&
+    state.currentTurn === 0 &&
+    state.collectingWinner === null &&
+    state.currentTrick.length < TRICK_SIZE
+  );
+}
+
 function loadCompletedGames() {
   if (typeof window === "undefined") return [];
 
@@ -135,7 +146,7 @@ function normalizeSavedGame(savedGame) {
 
   const initialGame = createInitialGame();
   const savedHands =
-    Array.isArray(savedGame.hands) && savedGame.hands.length === 4
+    Array.isArray(savedGame.hands) && savedGame.hands.length === PLAYER_COUNT
       ? savedGame.hands.map((hand) => (Array.isArray(hand) ? hand : []))
       : initialGame.hands;
   const savedBidInfo = savedGame.bidInfo && typeof savedGame.bidInfo === "object" ? savedGame.bidInfo : {};
@@ -374,7 +385,7 @@ export default function App() {
     }
 
     if (state.phase === "PLAY") {
-      if (state.currentTrick.length === 4) {
+      if (state.currentTrick.length >= TRICK_SIZE) {
         if (state.collectingWinner !== null) {
           const winner = state.collectingWinner;
           delay(() => collectResolvedTrick(winner), 500);
@@ -384,7 +395,7 @@ export default function App() {
         return;
       }
 
-      if (state.currentTurn === 0) {
+      if (canHumanPlayCard(state)) {
         mutateGame((nextState) => {
           const hand = nextState.hands[0];
           const selectedCard = hand[nextState.selectedCardIndex];
@@ -394,7 +405,7 @@ export default function App() {
             nextState.selectedCardIndex = -1;
           }
         });
-      } else {
+      } else if (state.currentTurn !== 0 && state.collectingWinner === null) {
         const botId = state.currentTurn;
         delay(() => botPlay(botId), 800);
       }
@@ -403,7 +414,7 @@ export default function App() {
 
   function advanceTurn() {
     mutateGame((state) => {
-      state.currentTurn = (state.currentTurn + 1) % 4;
+      state.currentTurn = (state.currentTurn + 1) % PLAYER_COUNT;
     });
 
     processTurn();
@@ -542,7 +553,7 @@ export default function App() {
       return;
     }
 
-    if (state.phase !== "PLAY" || state.currentTurn !== 0 || !playable) return;
+    if (!canHumanPlayCard(state) || !playable) return;
 
     mutateGame((nextState) => {
       nextState.selectedCardIndex = nextState.selectedCardIndex === index ? -1 : index;
@@ -551,7 +562,7 @@ export default function App() {
 
   function humanPlayCard() {
     const state = gameRef.current;
-    if (state.phase !== "PLAY" || state.currentTurn !== 0 || state.selectedCardIndex < 0) return;
+    if (!canHumanPlayCard(state) || state.selectedCardIndex < 0) return;
 
     const card = state.hands[0][state.selectedCardIndex];
     if (!card) return;
@@ -571,7 +582,14 @@ export default function App() {
 
   function botPlay(playerId) {
     const state = gameRef.current;
-    if (state.phase !== "PLAY" || state.currentTurn !== playerId) return;
+    if (
+      state.phase !== "PLAY" ||
+      state.currentTurn !== playerId ||
+      state.collectingWinner !== null ||
+      state.currentTrick.length >= TRICK_SIZE
+    ) {
+      return;
+    }
 
     const choice = chooseBotPlay(state, playerId);
     if (!choice) return;
@@ -594,14 +612,15 @@ export default function App() {
 
   function resolveTrick() {
     const state = gameRef.current;
-    if (state.phase !== "PLAY" || state.currentTrick.length !== 4) return;
+    if (state.phase !== "PLAY" || state.collectingWinner !== null || state.currentTrick.length < TRICK_SIZE) return;
 
-    const leadColor = getLeadColor(state.currentTrick, state.trump);
+    const completedTrick = state.currentTrick.slice(0, TRICK_SIZE);
+    const leadColor = getLeadColor(completedTrick, state.trump);
     let bestIndex = 0;
-    let bestPower = getCardPower(state.currentTrick[0].card, state.trump, leadColor);
+    let bestPower = getCardPower(completedTrick[0].card, state.trump, leadColor);
     let points = 0;
 
-    state.currentTrick.forEach((play, index) => {
+    completedTrick.forEach((play, index) => {
       points += play.card.value;
 
       if (index === 0) return;
@@ -619,6 +638,7 @@ export default function App() {
     mutateGame((nextState) => {
       nextState.collectingWinner = winner;
       nextState.pointsTaken[winningTeam] += points;
+      nextState.selectedCardIndex = -1;
     });
 
     showBubble(winner, `+${points}`);
@@ -631,14 +651,24 @@ export default function App() {
     let completedGame = null;
 
     mutateGame((nextState) => {
-      if (nextState.phase !== "PLAY" || nextState.currentTrick.length !== 4 || nextState.collectingWinner !== winner) return;
+      if (
+        nextState.phase !== "PLAY" ||
+        nextState.currentTrick.length < TRICK_SIZE ||
+        nextState.collectingWinner !== winner
+      ) {
+        return;
+      }
 
-      nextState.tricks.push(nextState.currentTrick.map((play) => ({ ...play })));
-      nextState.currentTrick = [];
+      const completedTrick = nextState.currentTrick.slice(0, TRICK_SIZE).map((play) => ({ ...play }));
+      const pendingTrick = nextState.currentTrick.slice(TRICK_SIZE);
+
+      nextState.tricks.push(completedTrick);
+      nextState.currentTrick = pendingTrick;
       nextState.collectingWinner = null;
-      nextState.currentTurn = winner;
+      nextState.currentTurn =
+        pendingTrick.length > 0 ? (pendingTrick[pendingTrick.length - 1].pid + 1) % PLAYER_COUNT : winner;
 
-      if (nextState.hands[0].length === 0) {
+      if (nextState.hands[0].length === 0 && nextState.currentTrick.length === 0) {
         completedGame = finishRound(nextState);
       } else {
         shouldContinue = true;
@@ -722,6 +752,7 @@ export default function App() {
   }, []);
 
   const appClassName = game.phase === "BID" && game.currentTurn === 0 ? "rook-app bid-focus" : "rook-app";
+  const humanCanPlay = canHumanPlayCard(game);
 
   if (game.phase === "MENU") {
     return (
@@ -755,14 +786,14 @@ export default function App() {
 
         <button
           id="play-btn"
-          className={game.phase === "PLAY" && game.currentTurn === 0 && game.selectedCardIndex !== -1 ? "visible" : ""}
+          className={humanCanPlay && game.selectedCardIndex !== -1 ? "visible" : ""}
           type="button"
           onClick={humanPlayCard}
         >
           PLAY CARD
         </button>
 
-        <Hand game={game} onCardClick={selectHandCard} />
+        <Hand game={game} humanCanPlay={humanCanPlay} onCardClick={selectHandCard} />
       </section>
 
       <Toast toast={game.toast} />
@@ -918,7 +949,7 @@ function KittyDisplay({ kitty, faceUp }) {
   );
 }
 
-function Hand({ game, onCardClick }) {
+function Hand({ game, humanCanPlay, onCardClick }) {
   const containerRef = useRef(null);
   const containerWidth = useElementWidth(containerRef);
   const hand = game.hands[0];
@@ -937,7 +968,7 @@ function Hand({ game, onCardClick }) {
           const isSelected = game.selectedCardIndex === index || (game.phase === "KITTY" && game.discardSelection.includes(index));
           const playable =
             game.phase === "KITTY" ||
-            (game.phase === "PLAY" && game.currentTurn === 0 && isValidMove(card, hand, leadColor, game.trump));
+            (humanCanPlay && isValidMove(card, hand, leadColor, game.trump));
           const offset = index - center;
           const rotation = offset * 3;
           const yTranslate = Math.abs(offset) * 4;
