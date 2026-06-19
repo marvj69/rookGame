@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "test": "node scripts/validate-discard-rule.mjs && node scripts/validate-ai-scenarios.mjs && node scripts/validate-belief-model.mjs && node scripts/validate-search-prototype.mjs",
+    "test": "node scripts/validate-discard-rule.mjs && node scripts/validate-ai-scenarios.mjs && node scripts/validate-belief-model.mjs && node scripts/validate-evaluation.mjs && node scripts/validate-search-prototype.mjs && node scripts/validate-live-search.mjs",
     "build": "vite build",
     "ai:benchmark": "node scripts/benchmark-ai.mjs",
+    "ai:tournament": "node scripts/ai-tournament.mjs",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {

@@ -4,15 +4,20 @@ import * as baselineAi from "./current-ai-baseline.mjs";
 import { simulateBenchmarkRange } from "./ai-benchmark-sim.mjs";
 
 try {
+  const candidateEngine = workerData.candidateEngine ?? "current";
+  const strategies = {
+    candidateAi: candidateEngine === "baseline" ? baselineAi : candidateAi,
+    baselineAi,
+  };
   const total = simulateBenchmarkRange({
     startIndex: workerData.startIndex,
     gamesPerSide: workerData.gamesPerSide,
     seed: workerData.seed,
-    strategies: { candidateAi, baselineAi },
+    strategies,
     options: workerData.options,
   });
 
-  parentPort.postMessage({ ok: true, startIndex: workerData.startIndex, total });
+  parentPort.postMessage({ ok: true, jobId: workerData.jobId, startIndex: workerData.startIndex, total });
 } catch (error) {
   parentPort.postMessage({
     ok: false,

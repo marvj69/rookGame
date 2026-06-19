@@ -1,13 +1,46 @@
 import { chooseBotPlay } from "../ai.js";
-import { getCardPower, getLeadColor, isValidMove, teamForPlayer } from "../game.js";
+import { getLeadColor, isValidMove, teamForPlayer } from "../game.js";
+import {
+  evaluateRoundState,
+  evaluateTerminalRound,
+  evaluateTrickDecision,
+  getWinningPlay,
+  resolveTrickResult,
+} from "./evaluation.js";
 import { inferPublicBelief, sampleHiddenHands } from "./belief.js";
-
-const DEFAULT_SAMPLE_COUNT = 8;
-const DEFAULT_MIN_SAMPLES = 1;
-const DEFAULT_TIME_LIMIT_MS = 35;
+import { DEFAULT_SEARCH_CONFIG, normalizeSearchConfig } from "./config.js";
 
 function now() {
   return globalThis.performance?.now?.() ?? Date.now();
+}
+
+function createSearchProfile() {
+  return {
+    beliefMs: 0,
+    samplingMs: 0,
+    cloneMs: 0,
+    rolloutMs: 0,
+    exactMs: 0,
+    leafMs: 0,
+    scoringMs: 0,
+    candidatesScored: 0,
+    exactCalls: 0,
+    rolloutCalls: 0,
+    leafCalls: 0,
+    sampleAttempts: 0,
+  };
+}
+
+function measureProfile(profile, key, fn) {
+  const startedAt = now();
+
+  try {
+    return fn();
+  } finally {
+    if (profile && key) {
+      profile[key] = (profile[key] ?? 0) + now() - startedAt;
+    }
+  }
 }
 
 function clonePublicGameWithSample(game, sample) {
@@ -46,90 +79,189 @@ function playCardInProjection(projectedGame, playerId, card) {
   return true;
 }
 
-function resolveProjectedTrick(currentTrick, trump) {
-  const leadColor = getLeadColor(currentTrick, trump);
-  let points = 0;
-  let bestIndex = 0;
-  let bestPower = getCardPower(currentTrick[0].card, trump, leadColor);
+function resolveTrickInPlace(game) {
+  const result = resolveTrickResult(game.currentTrick, game.trump);
+  game.pointsTaken[result.winningTeam] += result.points;
+  game.tricks.push(game.currentTrick.map((play) => ({ ...play })));
+  game.currentTrick = [];
+  game.currentTurn = result.winner;
+  return result;
+}
 
-  currentTrick.forEach((play, index) => {
-    points += play.card.value;
+function allHandsEmpty(game) {
+  return game.hands.every((hand) => hand.length === 0);
+}
 
-    if (index === 0) return;
-
-    const power = getCardPower(play.card, trump, leadColor);
-    if (power > bestPower) {
-      bestPower = power;
-      bestIndex = index;
-    }
-  });
-
+function cloneProjectionState(game) {
   return {
-    points,
-    winner: currentTrick[bestIndex].pid,
+    ...game,
+    hands: game.hands.map((hand) => [...hand]),
+    bidInfo: {
+      ...game.bidInfo,
+      passed: [...(game.bidInfo?.passed ?? [])],
+    },
+    tricks: (game.tricks ?? []).map((trick) => trick.map((play) => ({ ...play }))),
+    currentTrick: (game.currentTrick ?? []).map((play) => ({ ...play })),
+    pointsTaken: { ...(game.pointsTaken ?? { us: 0, them: 0 }) },
   };
 }
 
-function scoreProjectedTrick(game, playerId, projection) {
-  const playerTeam = teamForPlayer(playerId);
-  const winningTeam = teamForPlayer(projection.winner);
-  const bidder = game.bidInfo?.bidder ?? game.dealer;
-  const bidTeam = teamForPlayer(bidder);
-  const bid = Math.max(100, game.bidInfo?.highBid ?? 100);
-  const bidTeamPoints = (game.pointsTaken?.[bidTeam] ?? 0) + (game.kittyPoints ?? 0);
-  const bidPressure = bidTeamPoints < bid && bidTeamPoints + projection.points >= bid;
-  const setPressure = bidTeamPoints + projection.points < bid ? 0 : 1;
-
-  let score = winningTeam === playerTeam ? projection.points : -projection.points;
-
-  if (winningTeam === bidTeam) {
-    score += playerTeam === bidTeam ? projection.points * 0.8 : -projection.points * 1.1;
-  } else {
-    score += playerTeam === bidTeam ? -projection.points * 0.9 : projection.points * 0.9;
-  }
-
-  if (bidPressure) {
-    score += playerTeam === bidTeam ? 20 : -20;
-  }
-
-  if (bidTeam !== playerTeam && setPressure === 0) {
-    score += 8;
-  }
-
-  return score;
+function maxHandSize(game) {
+  return Math.max(...game.hands.map((hand) => hand.length));
 }
 
-function evaluateCandidateOnSample(game, playerId, candidate, sample, policy) {
-  const projectedGame = clonePublicGameWithSample(game, sample);
+function serializeExactState(game) {
+  return [
+    game.currentTurn,
+    game.currentTrick.map((play) => `${play.pid}:${play.card.id}`).join("."),
+    game.pointsTaken.us,
+    game.pointsTaken.them,
+    game.hands.map((hand) => hand.map((card) => card.id).join(".")).join("|"),
+  ].join("/");
+}
+
+function maybeResolveFullTrick(game) {
+  if (game.currentTrick.length === 4) {
+    resolveTrickInPlace(game);
+  }
+}
+
+function isTerminalRound(game) {
+  maybeResolveFullTrick(game);
+  return allHandsEmpty(game) && game.currentTrick.length === 0;
+}
+
+function scoreLeaf(game, playerId, playedCard, previousWinner, evaluationWeights) {
+  if (game.currentTrick.length > 0) {
+    const winningPlay = getWinningPlay(game.currentTrick, game.trump);
+    return evaluateTrickDecision(game, playerId, {
+      winner: winningPlay.pid,
+      points: game.currentTrick.reduce((sum, play) => sum + play.card.value, 0),
+      card: playedCard,
+      previousWinner,
+      weights: evaluationWeights,
+    });
+  }
+
+  return evaluateRoundState(game, playerId, evaluationWeights);
+}
+
+function rolloutToTerminal(game, playerId, policy, deadlineMs, evaluationWeights) {
+  while (now() < deadlineMs) {
+    maybeResolveFullTrick(game);
+
+    if (allHandsEmpty(game) && game.currentTrick.length === 0) {
+      return evaluateTerminalRound(game, playerId, evaluationWeights);
+    }
+
+    const nextPlayerId = game.currentTurn;
+    const nextCard = policy(game, nextPlayerId);
+    if (!nextCard) return null;
+
+    const nextHand = game.hands[nextPlayerId];
+    const leadColor = getLeadColor(game.currentTrick, game.trump);
+    if (!isValidMove(nextCard, nextHand, leadColor, game.trump)) return null;
+
+    if (!playCardInProjection(game, nextPlayerId, nextCard)) return null;
+  }
+
+  return null;
+}
+
+function exactEndgameValue(game, playerId, deadlineMs, memo, budget, evaluationWeights) {
+  if (now() >= deadlineMs || budget.nodes >= budget.maxNodes) return null;
+  budget.nodes += 1;
+
+  maybeResolveFullTrick(game);
+
+  if (allHandsEmpty(game) && game.currentTrick.length === 0) {
+    return evaluateTerminalRound(game, playerId, evaluationWeights);
+  }
+
+  const cacheKey = serializeExactState(game);
+  if (memo.has(cacheKey)) return memo.get(cacheKey);
+
+  const legalCards = getLegalPlayCandidates(game, game.currentTurn);
+  const maximizing = teamForPlayer(game.currentTurn) === teamForPlayer(playerId);
+  let bestValue = maximizing ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY;
+
+  for (const card of legalCards) {
+    const nextGame = cloneProjectionState(game);
+    if (!playCardInProjection(nextGame, nextGame.currentTurn, card)) continue;
+
+    const value = exactEndgameValue(nextGame, playerId, deadlineMs, memo, budget, evaluationWeights);
+    if (value === null) return null;
+
+    bestValue = maximizing ? Math.max(bestValue, value) : Math.min(bestValue, value);
+  }
+
+  memo.set(cacheKey, bestValue);
+  return bestValue;
+}
+
+function evaluateCandidateOnSample(game, playerId, candidate, sample, policy, options, deadlineMs, profile) {
+  const projectedGame = measureProfile(profile, "cloneMs", () => clonePublicGameWithSample(game, sample));
+  const previousWinner = projectedGame.currentTrick.length > 0 ? getWinningPlay(projectedGame.currentTrick, projectedGame.trump).pid : null;
 
   if (!playCardInProjection(projectedGame, playerId, candidate)) return null;
 
-  while (projectedGame.currentTrick.length < 4) {
-    const nextPlayerId = projectedGame.currentTurn;
-    const nextCard = policy(projectedGame, nextPlayerId);
-    if (!nextCard) return null;
-
-    const nextHand = projectedGame.hands[nextPlayerId];
-    const leadColor = getLeadColor(projectedGame.currentTrick, projectedGame.trump);
-    if (!isValidMove(nextCard, nextHand, leadColor, projectedGame.trump)) return null;
-
-    if (!playCardInProjection(projectedGame, nextPlayerId, nextCard)) return null;
+  if (isTerminalRound(projectedGame)) {
+    return measureProfile(profile, "scoringMs", () => evaluateTerminalRound(projectedGame, playerId, options.evaluation));
   }
 
-  const projection = resolveProjectedTrick(projectedGame.currentTrick, projectedGame.trump);
-  return scoreProjectedTrick(game, playerId, projection);
+  if (maxHandSize(projectedGame) <= options.exactEndgameHandSize) {
+    if (profile) profile.exactCalls += 1;
+    const exactValue = measureProfile(profile, "exactMs", () =>
+      exactEndgameValue(
+        projectedGame,
+        playerId,
+        deadlineMs,
+        new Map(),
+        {
+          nodes: 0,
+          maxNodes: options.exactNodeLimit,
+        },
+        options.evaluation,
+      ),
+    );
+
+    if (exactValue !== null) return exactValue;
+  }
+
+  if (maxHandSize(projectedGame) <= options.rolloutMaxHandSize) {
+    if (profile) profile.rolloutCalls += 1;
+    const rolloutValue = measureProfile(profile, "rolloutMs", () =>
+      rolloutToTerminal(projectedGame, playerId, policy, deadlineMs, options.evaluation),
+    );
+    if (rolloutValue !== null) return rolloutValue;
+  }
+
+  if (profile) profile.leafCalls += 1;
+  return measureProfile(profile, "leafMs", () => scoreLeaf(projectedGame, playerId, candidate, previousWinner, options.evaluation));
 }
 
 export function evaluateSampledPlayCandidates(game, playerId, options = {}) {
   const startedAt = now();
-  const timeLimitMs = options.timeLimitMs ?? DEFAULT_TIME_LIMIT_MS;
-  const maxSamples = options.samples ?? DEFAULT_SAMPLE_COUNT;
-  const minSamples = options.minSamples ?? DEFAULT_MIN_SAMPLES;
-  const seed = options.seed ?? 1;
+  const config = normalizeSearchConfig({
+    ...DEFAULT_SEARCH_CONFIG,
+    ...(options.config ?? {}),
+    ...options,
+  });
+  const timeLimitMs = config.timeLimitMs;
+  const maxSamples = config.samples;
+  const minSamples = config.minSamples;
+  const seed = config.seed;
   const policy = options.policy ?? chooseBotPlay;
+  const searchOptions = {
+    exactEndgameHandSize: config.exactEndgameHandSize,
+    exactNodeLimit: config.exactNodeLimit,
+    rolloutMaxHandSize: config.rolloutMaxHandSize ?? Number.POSITIVE_INFINITY,
+    evaluation: config.evaluation,
+  };
+  const profile = options.profile === false ? null : createSearchProfile();
   const candidates = getLegalPlayCandidates(game, playerId);
   const fallbackCard = options.fallbackCard ?? policy(game, playerId);
-  const belief = options.belief ?? inferPublicBelief(game, playerId);
+  const belief = options.belief ?? measureProfile(profile, "beliefMs", () => inferPublicBelief(game, playerId));
   const candidateScores = candidates.map((card) => ({
     card,
     totalScore: 0,
@@ -145,34 +277,67 @@ export function evaluateSampledPlayCandidates(game, playerId, options = {}) {
       reason: "single-candidate",
       samplesUsed: 0,
       elapsedMs: now() - startedAt,
+      profile,
       candidates: candidateScores,
     };
   }
 
   let samplesUsed = 0;
+  const deadlineMs = startedAt + timeLimitMs;
 
   for (let sampleIndex = 0; sampleIndex < maxSamples; sampleIndex += 1) {
-    if (now() - startedAt >= timeLimitMs) break;
+    if (now() >= deadlineMs) break;
 
-    const sample = sampleHiddenHands(game, playerId, {
-      belief,
-      seed: seed + sampleIndex * 9973,
-      maxAttempts: options.maxSampleAttempts ?? 80,
-    });
+    let sample = null;
+    try {
+      sample = measureProfile(profile, "samplingMs", () =>
+        sampleHiddenHands(game, playerId, {
+          belief,
+          seed: seed + sampleIndex * 9973,
+          maxAttempts: config.maxSampleAttempts,
+          deadlineMs,
+        }),
+      );
+    } catch {
+      break;
+    }
+
+    if (profile) profile.sampleAttempts += sample.attempt + 1;
 
     let scoredAnyCandidate = false;
 
-    candidateScores.forEach((candidateScore) => {
-      const score = evaluateCandidateOnSample(game, playerId, candidateScore.card, sample, policy);
-      if (score === null) return;
+    for (const candidateScore of candidateScores) {
+      if (now() >= deadlineMs) break;
+
+      const score = evaluateCandidateOnSample(
+        game,
+        playerId,
+        candidateScore.card,
+        sample,
+        policy,
+        searchOptions,
+        deadlineMs,
+        profile,
+      );
+      if (score === null) continue;
 
       candidateScore.totalScore += score;
       candidateScore.samples += 1;
       scoredAnyCandidate = true;
-    });
+      if (profile) profile.candidatesScored += 1;
+    }
 
     if (scoredAnyCandidate) {
       samplesUsed += 1;
+    }
+
+    if (config.earlyStopLead !== null && samplesUsed >= minSamples) {
+      const rankedScores = candidateScores
+        .filter((candidateScore) => candidateScore.samples > 0)
+        .map((candidateScore) => candidateScore.totalScore / candidateScore.samples)
+        .sort((a, b) => b - a);
+
+      if (rankedScores.length > 1 && rankedScores[0] - rankedScores[1] >= config.earlyStopLead) break;
     }
   }
 
@@ -189,6 +354,7 @@ export function evaluateSampledPlayCandidates(game, playerId, options = {}) {
       reason: "insufficient-samples",
       samplesUsed,
       elapsedMs: now() - startedAt,
+      profile,
       candidates: candidateScores,
     };
   }
@@ -203,9 +369,10 @@ export function evaluateSampledPlayCandidates(game, playerId, options = {}) {
     card: bestCandidate?.card ?? fallbackCard,
     fallbackCard,
     usedFallback: false,
-    reason: "sampled-trick",
+    reason: "sampled-rollout",
     samplesUsed,
     elapsedMs: now() - startedAt,
+    profile,
     candidates: candidateScores,
   };
 }

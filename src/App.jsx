@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { chooseBotBid, chooseBotKittyPlan, chooseBotPlay } from "./ai.js";
 import {
+  AI_STRENGTH_FAST,
+  AI_STRENGTH_STRONG,
+  createPublicSearchView,
+  createStrongAiWorker,
+  deriveStrongAiSeed,
+  getStrongAiResponseTimeoutMs,
+  normalizeAiStrength,
+} from "./ai/liveSearch.js";
+import {
   BID_START,
   COLORS,
   DISCARD_COUNT,
@@ -183,7 +192,11 @@ function normalizeSavedGame(savedGame) {
     tricks: Array.isArray(savedGame.tricks) ? savedGame.tricks : initialGame.tricks,
     currentTrick: Array.isArray(savedGame.currentTrick) ? savedGame.currentTrick : initialGame.currentTrick,
     pointsTaken: { ...initialGame.pointsTaken, ...savedPointsTaken },
-    settings: { ...initialGame.settings, ...savedSettings },
+    settings: {
+      ...initialGame.settings,
+      ...savedSettings,
+      aiStrength: normalizeAiStrength(savedSettings.aiStrength),
+    },
     discardSelection: Array.isArray(savedGame.discardSelection) ? savedGame.discardSelection : initialGame.discardSelection,
     toast: initialGame.toast,
     bubbles: initialGame.bubbles,
@@ -258,6 +271,10 @@ function formatCompletedDate(value) {
 export default function App() {
   const gameRef = useRef(null);
   const activeTimeoutsRef = useRef([]);
+  const strongAiWorkerRef = useRef(null);
+  const strongAiRequestsRef = useRef(new Map());
+  const strongAiRequestIdRef = useRef(0);
+  const activeStrongAiTurnRef = useRef(null);
 
   if (gameRef.current === null) {
     gameRef.current = loadActiveGame() || createInitialGame();
@@ -281,6 +298,7 @@ export default function App() {
   function clearAllTimeouts() {
     activeTimeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
     activeTimeoutsRef.current = [];
+    cancelStrongAiRequests();
   }
 
   function delay(fn, ms) {
@@ -321,6 +339,230 @@ export default function App() {
         }
       });
     }, 2000);
+  }
+
+  function cancelStrongAiRequests() {
+    strongAiRequestsRef.current.forEach((request) => {
+      window.clearTimeout(request.timeoutId);
+      request.reject(new Error("Strong AI request cancelled."));
+    });
+    strongAiRequestsRef.current.clear();
+    activeStrongAiTurnRef.current = null;
+  }
+
+  function failStrongAiRequests(error) {
+    strongAiRequestsRef.current.forEach((request) => {
+      window.clearTimeout(request.timeoutId);
+      request.reject(error);
+    });
+    strongAiRequestsRef.current.clear();
+  }
+
+  function getStrongAiWorker() {
+    if (typeof Worker === "undefined") return null;
+    if (strongAiWorkerRef.current) return strongAiWorkerRef.current;
+
+    const worker = createStrongAiWorker();
+
+    worker.onmessage = (event) => {
+      const { type, requestId, ok, card, error } = event.data ?? {};
+      if (type === "warm") return;
+
+      const request = strongAiRequestsRef.current.get(requestId);
+      if (!request) return;
+
+      window.clearTimeout(request.timeoutId);
+      strongAiRequestsRef.current.delete(requestId);
+
+      if (ok && card) {
+        request.resolve({
+          ...event.data,
+          receivedByAppAt: window.performance.now(),
+          publicViewElapsedMs: request.publicViewElapsedMs,
+          sentAt: request.sentAt,
+          context: request.context,
+        });
+      } else {
+        const workerError = new Error(error || "Strong AI returned no card.");
+        workerError.reason = "worker-error";
+        workerError.context = request.context;
+        workerError.workerElapsedMs = event.data?.workerElapsedMs;
+        request.reject(workerError);
+      }
+    };
+
+    worker.onerror = () => {
+      const workerError = new Error("Strong AI worker failed.");
+      workerError.reason = "worker-error";
+      failStrongAiRequests(workerError);
+      worker.terminate();
+      strongAiWorkerRef.current = null;
+    };
+
+    strongAiWorkerRef.current = worker;
+    return worker;
+  }
+
+  function getStrongAiContext(state, playerId) {
+    return {
+      playerId,
+      cardsRemaining: state.hands[playerId]?.length ?? 0,
+      maxCardsRemaining: Math.max(...state.hands.map((hand) => hand.length)),
+      trickPosition: state.currentTrick.length,
+      completedTricks: state.tricks.length,
+      bid: state.bidInfo.highBid,
+      bidTeam: state.bidInfo.bidder === null ? null : teamForPlayer(state.bidInfo.bidder),
+      trump: state.trump,
+    };
+  }
+
+  function requestStrongBotCard(state, playerId) {
+    let worker = null;
+
+    try {
+      worker = getStrongAiWorker();
+    } catch {
+      worker = null;
+    }
+
+    if (!worker) return Promise.reject(new Error("Strong AI worker is unavailable."));
+
+    const publicViewStartedAt = window.performance.now();
+    const publicState = createPublicSearchView(state, playerId);
+    const publicViewElapsedMs = window.performance.now() - publicViewStartedAt;
+    const requestId = (strongAiRequestIdRef.current += 1);
+    const context = getStrongAiContext(state, playerId);
+
+    return new Promise((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        strongAiRequestsRef.current.delete(requestId);
+        if (strongAiWorkerRef.current === worker) {
+          worker.terminate();
+          strongAiWorkerRef.current = null;
+        }
+        const timeoutError = new Error("Strong AI timed out.");
+        timeoutError.reason = "timeout";
+        timeoutError.context = context;
+        reject(timeoutError);
+      }, getStrongAiResponseTimeoutMs());
+
+      const sentAt = window.performance.now();
+      strongAiRequestsRef.current.set(requestId, { resolve, reject, timeoutId, publicViewElapsedMs, sentAt, context });
+      worker.postMessage({
+        type: "play",
+        requestId,
+        game: publicState,
+        playerId,
+        seed: deriveStrongAiSeed(publicState, playerId),
+        sentAt,
+      });
+    });
+  }
+
+  function createStrongAiStats() {
+    return {
+      playCalls: 0,
+      decisions: 0,
+      searchRequested: 0,
+      completions: 0,
+      searchCompleted: 0,
+      searchFallbacks: 0,
+      fallbacks: 0,
+      timeouts: 0,
+      staleResults: 0,
+      illegalResults: 0,
+      workerErrors: 0,
+      errors: 0,
+      totalWorkerMs: 0,
+      averageWorkerMs: 0,
+      totalRoundTripMs: 0,
+      averageRoundTripMs: 0,
+      totalPublicViewMs: 0,
+      averagePublicViewMs: 0,
+      totalMessageMs: 0,
+      averageMessageMs: 0,
+      totalTransportMs: 0,
+      averageTransportMs: 0,
+      totalSamples: 0,
+      averageSamples: 0,
+      fallbackReasons: {},
+      timeoutContexts: [],
+      lastContext: null,
+      lastFallbackReason: null,
+      lastProfile: null,
+    };
+  }
+
+  function updateAverage(stats, totalKey, countKey, averageKey) {
+    stats[averageKey] = stats[countKey] > 0 ? stats[totalKey] / stats[countKey] : 0;
+  }
+
+  function recordStrongAiFallback(stats, reason, context) {
+    const fallbackReason = reason || "unknown";
+    stats.lastFallbackReason = fallbackReason;
+    stats.fallbackReasons[fallbackReason] = (stats.fallbackReasons[fallbackReason] ?? 0) + 1;
+
+    if (fallbackReason === "timeout" && context) {
+      stats.timeoutContexts = [...stats.timeoutContexts, context].slice(-20);
+    }
+  }
+
+  function recordStrongAiResultMetrics(stats, result) {
+    const roundTripMs = Math.max(0, (result.receivedByAppAt ?? window.performance.now()) - (result.sentAt ?? 0));
+    const workerMs = result.workerElapsedMs ?? result.elapsedMs ?? 0;
+    const publicViewMs = result.publicViewElapsedMs ?? 0;
+    const transportMs = Math.max(0, roundTripMs - workerMs - publicViewMs);
+
+    stats.totalWorkerMs += workerMs;
+    stats.totalRoundTripMs += roundTripMs;
+    stats.totalPublicViewMs += publicViewMs;
+    stats.totalMessageMs += transportMs;
+    stats.totalTransportMs += transportMs;
+    stats.totalSamples += result.samplesUsed ?? 0;
+    stats.lastContext = result.context ?? null;
+    stats.lastProfile = {
+      elapsedMs: result.elapsedMs ?? 0,
+      workerElapsedMs: workerMs,
+      publicViewMs,
+      messageMs: transportMs,
+      transportMs,
+      samplesUsed: result.samplesUsed ?? 0,
+      reason: result.reason,
+      profile: result.profile ?? null,
+    };
+
+    updateAverage(stats, "totalWorkerMs", "searchCompleted", "averageWorkerMs");
+    updateAverage(stats, "totalRoundTripMs", "searchCompleted", "averageRoundTripMs");
+    updateAverage(stats, "totalPublicViewMs", "searchCompleted", "averagePublicViewMs");
+    updateAverage(stats, "totalMessageMs", "searchCompleted", "averageMessageMs");
+    updateAverage(stats, "totalTransportMs", "searchCompleted", "averageTransportMs");
+    updateAverage(stats, "totalSamples", "searchCompleted", "averageSamples");
+  }
+
+  function recordStrongAiStat(name, payload = {}) {
+    if (typeof window === "undefined") return;
+
+    const stats = window.__rookStrongAiStats ?? createStrongAiStats();
+    stats[name] = (stats[name] ?? 0) + 1;
+
+    if (payload.context) {
+      stats.lastContext = payload.context;
+    }
+
+    if (payload.fallbackReason) {
+      recordStrongAiFallback(stats, payload.fallbackReason, payload.context);
+    }
+
+    if (payload.result) {
+      recordStrongAiResultMetrics(stats, payload.result);
+      if (payload.result.usedFallback) {
+        stats.searchFallbacks += 1;
+        recordStrongAiFallback(stats, payload.result.reason, payload.result.context);
+      }
+    }
+
+    window.__rookStrongAiStats = stats;
+    window.document.documentElement.dataset.strongAiStats = JSON.stringify(stats);
   }
 
   function recordCompletedGame(completedGame) {
@@ -617,6 +859,67 @@ export default function App() {
     advanceTurn();
   }
 
+  function canBotPlay(state, playerId) {
+    return (
+      state.phase === "PLAY" &&
+      state.currentTurn === playerId &&
+      state.collectingWinner === null &&
+      state.currentTrick.length < TRICK_SIZE
+    );
+  }
+
+  function getBotTurnKey(state, playerId) {
+    return [
+      playerId,
+      state.phase,
+      state.currentTurn,
+      state.tricks.length,
+      state.currentTrick.map((play) => `${play.pid}:${play.card.id}`).join("."),
+      state.hands[playerId].map((card) => card.id).join("."),
+    ].join("|");
+  }
+
+  function isLegalBotChoice(state, playerId, choice) {
+    if (!choice || !canBotPlay(state, playerId)) return false;
+
+    const hand = state.hands[playerId];
+    const leadColor = getLeadColor(state.currentTrick, state.trump);
+    return hand.some((card) => card.id === choice.id) && isValidMove(choice, hand, leadColor, state.trump);
+  }
+
+  function playBotChoice(playerId, choice) {
+    const state = gameRef.current;
+    let selectedChoice = choice;
+
+    if (!isLegalBotChoice(state, playerId, selectedChoice)) {
+      selectedChoice = chooseBotPlay(state, playerId);
+    }
+
+    if (!isLegalBotChoice(state, playerId, selectedChoice)) return;
+
+    let didPlay = false;
+
+    mutateGame((nextState) => {
+      if (!canBotPlay(nextState, playerId)) return;
+
+      const cardIndex = nextState.hands[playerId].findIndex((card) => card.id === selectedChoice.id);
+      if (cardIndex < 0) return;
+
+      const [playedCard] = nextState.hands[playerId].splice(cardIndex, 1);
+
+      nextState.currentTrick.push({
+        pid: playerId,
+        card: playedCard,
+        rotation: Math.random() * 20 - 10,
+      });
+      didPlay = true;
+    });
+
+    if (didPlay) {
+      advanceTurn();
+    }
+  }
+
   function botPlay(playerId) {
     const state = gameRef.current;
     if (
@@ -628,23 +931,55 @@ export default function App() {
       return;
     }
 
-    const choice = chooseBotPlay(state, playerId);
-    if (!choice) return;
+    recordStrongAiStat("playCalls");
+    const fallbackChoice = chooseBotPlay(state, playerId);
+    if (normalizeAiStrength(state.settings.aiStrength) !== AI_STRENGTH_STRONG) {
+      playBotChoice(playerId, fallbackChoice);
+      return;
+    }
 
-    mutateGame((nextState) => {
-      const cardIndex = nextState.hands[playerId].findIndex((card) => card.id === choice.id);
-      if (cardIndex >= 0) {
-        nextState.hands[playerId].splice(cardIndex, 1);
-      }
+    const turnKey = getBotTurnKey(state, playerId);
+    if (activeStrongAiTurnRef.current === turnKey) return;
+    activeStrongAiTurnRef.current = turnKey;
+    recordStrongAiStat("decisions");
+    recordStrongAiStat("searchRequested", { context: getStrongAiContext(state, playerId) });
 
-      nextState.currentTrick.push({
-        pid: playerId,
-        card: choice,
-        rotation: Math.random() * 20 - 10,
+    requestStrongBotCard(state, playerId)
+      .then((result) => {
+        if (activeStrongAiTurnRef.current !== turnKey) {
+          recordStrongAiStat("staleResults", { result, context: result.context });
+          return;
+        }
+        activeStrongAiTurnRef.current = null;
+        recordStrongAiStat("completions");
+        recordStrongAiStat("searchCompleted", { result });
+
+        if (!isLegalBotChoice(gameRef.current, playerId, result.card)) {
+          recordStrongAiStat("illegalResults", { result, fallbackReason: "illegal-result", context: result.context });
+          recordStrongAiStat("fallbacks", { fallbackReason: "illegal-result", context: result.context });
+          playBotChoice(playerId, fallbackChoice);
+          return;
+        }
+
+        playBotChoice(playerId, result.card);
+      })
+      .catch((error) => {
+        if (activeStrongAiTurnRef.current !== turnKey) {
+          recordStrongAiStat("staleResults", { fallbackReason: "stale-error", context: error?.context });
+          return;
+        }
+        activeStrongAiTurnRef.current = null;
+        const fallbackReason = error?.reason ?? (error?.message?.includes("timed out") ? "timeout" : "error");
+        recordStrongAiStat("fallbacks", { fallbackReason, context: error?.context });
+        if (fallbackReason === "timeout") {
+          recordStrongAiStat("timeouts", { context: error?.context });
+        } else if (fallbackReason === "worker-error") {
+          recordStrongAiStat("workerErrors", { context: error?.context });
+        } else {
+          recordStrongAiStat("errors", { context: error?.context });
+        }
+        playBotChoice(playerId, fallbackChoice);
       });
-    });
-
-    advanceTurn();
   }
 
   function resolveTrick() {
@@ -780,11 +1115,29 @@ export default function App() {
     });
   }
 
+  function setAiStrength(strength) {
+    const nextStrength = normalizeAiStrength(strength);
+
+    mutateGame((state) => {
+      state.settings.aiStrength = nextStrength;
+    });
+
+    if (nextStrength === AI_STRENGTH_STRONG) {
+      try {
+        getStrongAiWorker()?.postMessage({ type: "warm" });
+      } catch {
+        strongAiWorkerRef.current = null;
+      }
+    }
+  }
+
   useEffect(() => {
     processTurn();
 
     return () => {
       clearAllTimeouts();
+      strongAiWorkerRef.current?.terminate();
+      strongAiWorkerRef.current = null;
     };
   }, []);
 
@@ -802,6 +1155,7 @@ export default function App() {
           onClearCompletedGames={clearCompletedGames}
           onSelectView={setMenuView}
           onStartGame={startGame}
+          onSetAiStrength={setAiStrength}
           onToggleMustWinByBid={toggleMustWinByBid}
         />
       </main>
@@ -863,6 +1217,7 @@ export default function App() {
           game={game}
           onClose={closeSettings}
           onRestart={startGame}
+          onSetAiStrength={setAiStrength}
           onToggleMustWinByBid={toggleMustWinByBid}
         />
       )}
@@ -1072,6 +1427,7 @@ function MainMenuScreen({
   onClearCompletedGames,
   onSelectView,
   onStartGame,
+  onSetAiStrength,
   onToggleMustWinByBid,
 }) {
   return (
@@ -1148,7 +1504,12 @@ function MainMenuScreen({
               <CompletedGamesView completedGames={completedGames} onClearCompletedGames={onClearCompletedGames} />
             )}
             {menuView === "settings" && (
-              <MenuSettingsView settings={settings} targetScore={targetScore} onToggleMustWinByBid={onToggleMustWinByBid} />
+              <MenuSettingsView
+                settings={settings}
+                targetScore={targetScore}
+                onSetAiStrength={onSetAiStrength}
+                onToggleMustWinByBid={onToggleMustWinByBid}
+              />
             )}
             {menuView === "how-to" && <HowToPlayView />}
           </div>
@@ -1221,7 +1582,32 @@ function CompletedGamesView({ completedGames, onClearCompletedGames }) {
   );
 }
 
-function MenuSettingsView({ settings, targetScore, onToggleMustWinByBid }) {
+function AiStrengthControl({ value, onChange }) {
+  const strength = normalizeAiStrength(value);
+
+  return (
+    <div className="segmented-control" role="group" aria-label="Bot strength">
+      <button
+        className={strength === AI_STRENGTH_FAST ? "segment active" : "segment"}
+        type="button"
+        aria-pressed={strength === AI_STRENGTH_FAST}
+        onClick={() => onChange(AI_STRENGTH_FAST)}
+      >
+        Fast
+      </button>
+      <button
+        className={strength === AI_STRENGTH_STRONG ? "segment active" : "segment"}
+        type="button"
+        aria-pressed={strength === AI_STRENGTH_STRONG}
+        onClick={() => onChange(AI_STRENGTH_STRONG)}
+      >
+        Strong
+      </button>
+    </div>
+  );
+}
+
+function MenuSettingsView({ settings, targetScore, onSetAiStrength, onToggleMustWinByBid }) {
   return (
     <>
       <p className="section-kicker">Settings</p>
@@ -1238,6 +1624,13 @@ function MenuSettingsView({ settings, targetScore, onToggleMustWinByBid }) {
             onChange={(event) => onToggleMustWinByBid(event.target.checked)}
           />
         </label>
+        <div className="menu-setting-row">
+          <span>
+            <strong>Bot Strength</strong>
+            <small>Fast keeps the current play heuristic. Strong uses search for bot play decisions.</small>
+          </span>
+          <AiStrengthControl value={settings.aiStrength} onChange={onSetAiStrength} />
+        </div>
       </div>
     </>
   );
@@ -1356,7 +1749,7 @@ function RoundEndModal({ result, primaryLabel, secondaryLabel, onPrimary, onSeco
   );
 }
 
-function SettingsModal({ game, onClose, onRestart, onToggleMustWinByBid }) {
+function SettingsModal({ game, onClose, onRestart, onSetAiStrength, onToggleMustWinByBid }) {
   return (
     <Modal id="menu-modal">
       <div className="modal-card">
@@ -1370,6 +1763,10 @@ function SettingsModal({ game, onClose, onRestart, onToggleMustWinByBid }) {
               onChange={(event) => onToggleMustWinByBid(event.target.checked)}
             />
           </label>
+          <div className="settings-row">
+            <span>Bot Strength</span>
+            <AiStrengthControl value={game.settings.aiStrength} onChange={onSetAiStrength} />
+          </div>
         </div>
         <button className="btn-primary" type="button" onClick={onRestart}>
           RESTART GAME

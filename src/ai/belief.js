@@ -3,6 +3,10 @@ import { COLORS, buildDeck, getEffectiveColor, getLeadColor, sortHand, teamForPl
 const PLAYER_IDS = [0, 1, 2, 3];
 const DEFAULT_SAMPLE_ATTEMPTS = 300;
 
+function now() {
+  return globalThis.performance?.now?.() ?? Date.now();
+}
+
 function createRandom(seed) {
   let value = seed >>> 0;
 
@@ -212,8 +216,11 @@ export function sampleHiddenHands(game, actingPlayerId, options = {}) {
   const belief = options.belief ?? inferPublicBelief(game, actingPlayerId);
   const maxAttempts = options.maxAttempts ?? DEFAULT_SAMPLE_ATTEMPTS;
   const seed = options.seed ?? 1;
+  const deadlineMs = options.deadlineMs ?? Number.POSITIVE_INFINITY;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (now() >= deadlineMs) break;
+
     const random = createRandom(seed + attempt * 0x9e3779b1);
     const assignment = assignHiddenHandsGreedy(belief.unseenCards, belief, random);
 

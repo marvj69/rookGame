@@ -438,6 +438,38 @@ input {
   accent-color: var(--accent-gold);
 }
 
+.segmented-control {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(72px, 1fr));
+  gap: 0;
+  min-width: 150px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 179, 0, 0.36);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.segment {
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 0;
+  color: rgba(255, 255, 255, 0.78);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.segment + .segment {
+  border-left: 1px solid rgba(255, 179, 0, 0.24);
+}
+
+.segment.active {
+  color: #2a1d05;
+  background: var(--accent-gold);
+}
+
 .rules-list {
   display: grid;
   gap: 12px;
@@ -1133,6 +1165,10 @@ input {
   width: 18px;
   height: 18px;
   cursor: pointer;
+}
+
+.settings-row .segmented-control {
+  min-width: 142px;
 }
 
 @media (max-width: 420px) {

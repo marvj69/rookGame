@@ -11,6 +11,7 @@ import {
   teamForPlayer,
 } from "../src/game.js";
 import { evaluateSampledPlayCandidates } from "../src/ai/search.js";
+import { DEFAULT_SEARCH_CONFIG, normalizeSearchConfig } from "../src/ai/config.js";
 
 const TARGET_SCORE = 500;
 const MAX_BID = 150;
@@ -59,13 +60,16 @@ export function parseBenchmarkArgs(args = process.argv.slice(2)) {
     gamesPerSide: requestedGamesPerSide ?? BENCHMARK_MODE_DEFAULT_GAMES[mode],
     seed: getArgNumber(args, "seed", 20260618),
     workerCount: requestedWorkers ?? (hasFlag(args, "parallel") || mode === "full" ? "auto" : 1),
-    search: {
-      timeLimitMs: getArgNumber(args, "search-ms", 25, 0),
-      samples: getArgNumber(args, "search-samples", 4),
-      seed: getArgNumber(args, "search-seed", 424242),
-      minSamples: getArgNumber(args, "search-min-samples", 1, 0),
-      maxSampleAttempts: getArgNumber(args, "search-sample-attempts", 40),
-    },
+    search: normalizeSearchConfig({
+      ...DEFAULT_SEARCH_CONFIG,
+      timeLimitMs: getArgNumber(args, "search-ms", DEFAULT_SEARCH_CONFIG.timeLimitMs, 0),
+      samples: getArgNumber(args, "search-samples", DEFAULT_SEARCH_CONFIG.samples),
+      seed: getArgNumber(args, "search-seed", DEFAULT_SEARCH_CONFIG.seed),
+      minSamples: getArgNumber(args, "search-min-samples", DEFAULT_SEARCH_CONFIG.minSamples, 0),
+      maxSampleAttempts: getArgNumber(args, "search-sample-attempts", DEFAULT_SEARCH_CONFIG.maxSampleAttempts),
+      exactEndgameHandSize: getArgNumber(args, "search-endgame", DEFAULT_SEARCH_CONFIG.exactEndgameHandSize, 0),
+      exactNodeLimit: getArgNumber(args, "search-node-limit", DEFAULT_SEARCH_CONFIG.exactNodeLimit),
+    }),
   };
 }
 
@@ -199,6 +203,9 @@ function choosePlayCard(state, playerId, candidateTeam, stats, strategies, optio
     minSamples: options.search.minSamples,
     timeLimitMs: options.search.timeLimitMs,
     maxSampleAttempts: options.search.maxSampleAttempts,
+    exactEndgameHandSize: options.search.exactEndgameHandSize,
+    exactNodeLimit: options.search.exactNodeLimit,
+    evaluation: options.search.evaluation,
     policy: strategy.chooseBotPlay,
     fallbackCard: strategy.chooseBotPlay(state, playerId),
   });
@@ -490,6 +497,50 @@ export function mergeBenchmarkTotals(total, next) {
   return total;
 }
 
+export function getBenchmarkMetrics(total, elapsedMs = 0) {
+  const candidateBidDecisions = total.stats.madeBids.candidate + total.stats.failedBids.candidate;
+  const baselineBidDecisions = total.stats.madeBids.baseline + total.stats.failedBids.baseline;
+  const totalDecisions = total.stats.decisions.candidate + total.stats.decisions.baseline;
+  const totalDecisionRuntimeMs = total.stats.decisionRuntimeMs.candidate + total.stats.decisionRuntimeMs.baseline;
+  const averageSamplesPerSearchDecision =
+    total.stats.search.decisions > 0 ? total.stats.search.samples / total.stats.search.decisions : 0;
+  const averageSearchMsPerDecision =
+    total.stats.search.decisions > 0 ? total.stats.search.runtimeMs / total.stats.search.decisions : 0;
+
+  return {
+    games: total.games,
+    wins: total.wins,
+    winRate: total.games > 0 ? total.wins / total.games : 0,
+    averageMargin: total.games > 0 ? total.margin / total.games : 0,
+    rounds: total.stats.rounds,
+    candidateRoundScoreAverage: total.stats.rounds > 0 ? total.stats.roundScore.candidate / total.stats.rounds : 0,
+    baselineRoundScoreAverage: total.stats.rounds > 0 ? total.stats.roundScore.baseline / total.stats.rounds : 0,
+    candidateBidsWon: total.stats.roundBids.candidate,
+    baselineBidsWon: total.stats.roundBids.baseline,
+    candidateBidMakeRate: candidateBidDecisions > 0 ? total.stats.madeBids.candidate / candidateBidDecisions : 0,
+    baselineBidMakeRate: baselineBidDecisions > 0 ? total.stats.madeBids.baseline / baselineBidDecisions : 0,
+    candidateDecisions: total.stats.decisions.candidate,
+    baselineDecisions: total.stats.decisions.baseline,
+    totalDecisions,
+    decisionsPerGame: total.games > 0 ? totalDecisions / total.games : 0,
+    illegalMoves: total.stats.illegalMoves,
+    decisionKinds: { ...total.stats.decisionKinds },
+    decisionKindRuntimeMs: { ...total.stats.decisionKindRuntimeMs },
+    searchDecisions: total.stats.search.decisions,
+    searchFallbacks: total.stats.search.fallbacks,
+    searchFallbackRate: total.stats.search.decisions > 0 ? total.stats.search.fallbacks / total.stats.search.decisions : 0,
+    searchSamples: total.stats.search.samples,
+    averageSearchSamplesPerDecision: averageSamplesPerSearchDecision,
+    averageSearchMsPerDecision,
+    searchTimeouts: total.stats.search.timeouts,
+    elapsedMs,
+    averageRuntimeMsPerGame: total.games > 0 ? elapsedMs / total.games : 0,
+    averageMeasuredMsPerDecision: totalDecisions > 0 ? totalDecisionRuntimeMs / totalDecisions : 0,
+    candidateDecisionRuntimeMs: total.stats.decisionRuntimeMs.candidate,
+    baselineDecisionRuntimeMs: total.stats.decisionRuntimeMs.baseline,
+  };
+}
+
 export function simulateBenchmarkRange({ startIndex = 0, gamesPerSide, seed, strategies, options }) {
   const total = createBenchmarkTotal();
   const benchmarkOptions = options ?? parseBenchmarkArgs([]);
@@ -509,16 +560,7 @@ export function simulateBenchmarkRange({ startIndex = 0, gamesPerSide, seed, str
 }
 
 export function formatBenchmarkSummary({ total, seed, mode, candidateMode, gamesPerSide, elapsedMs, workerCount, search }) {
-  const candidateBidDecisions = total.stats.madeBids.candidate + total.stats.failedBids.candidate;
-  const baselineBidDecisions = total.stats.madeBids.baseline + total.stats.failedBids.baseline;
-  const totalDecisions = total.stats.decisions.candidate + total.stats.decisions.baseline;
-  const totalDecisionRuntimeMs = total.stats.decisionRuntimeMs.candidate + total.stats.decisionRuntimeMs.baseline;
-  const averageSamplesPerSearchDecision =
-    total.stats.search.decisions > 0 ? total.stats.search.samples / total.stats.search.decisions : 0;
-  const averageSearchMsPerDecision =
-    total.stats.search.decisions > 0 ? total.stats.search.runtimeMs / total.stats.search.decisions : 0;
-  const searchFallbackRate =
-    total.stats.search.decisions > 0 ? pct(total.stats.search.fallbacks, total.stats.search.decisions) : "0.0%";
+  const metrics = getBenchmarkMetrics(total, elapsedMs);
 
   return [
     `AI benchmark seed: ${seed}`,
@@ -528,19 +570,17 @@ export function formatBenchmarkSummary({ total, seed, mode, candidateMode, games
     `Games per orientation: ${gamesPerSide}`,
     `Total games: ${total.games}`,
     `Candidate wins: ${total.wins}/${total.games} (${pct(total.wins, total.games)})`,
-    `Average final margin: ${(total.margin / total.games).toFixed(1)} points`,
+    `Average final margin: ${metrics.averageMargin.toFixed(1)} points`,
     `Rounds played: ${total.stats.rounds}`,
-    `Round score average: candidate ${(total.stats.roundScore.candidate / total.stats.rounds).toFixed(1)}, baseline ${(
-      total.stats.roundScore.baseline / total.stats.rounds
-    ).toFixed(1)}`,
+    `Round score average: candidate ${metrics.candidateRoundScoreAverage.toFixed(1)}, baseline ${metrics.baselineRoundScoreAverage.toFixed(1)}`,
     `Bids won: candidate ${total.stats.roundBids.candidate}, baseline ${total.stats.roundBids.baseline}`,
-    `Bid make rate: candidate ${pct(total.stats.madeBids.candidate, candidateBidDecisions)}, baseline ${pct(
+    `Bid make rate: candidate ${pct(total.stats.madeBids.candidate, total.stats.madeBids.candidate + total.stats.failedBids.candidate)}, baseline ${pct(
       total.stats.madeBids.baseline,
-      baselineBidDecisions,
+      total.stats.madeBids.baseline + total.stats.failedBids.baseline,
     )}`,
-    `Decisions: candidate ${total.stats.decisions.candidate}, baseline ${total.stats.decisions.baseline}, total ${totalDecisions}, average ${(
-      totalDecisions / total.games
-    ).toFixed(1)}/game`,
+    `Decisions: candidate ${total.stats.decisions.candidate}, baseline ${total.stats.decisions.baseline}, total ${metrics.totalDecisions}, average ${metrics.decisionsPerGame.toFixed(
+      1,
+    )}/game`,
     `Illegal move count: ${total.stats.illegalMoves}`,
     `Decision type counts: bid ${total.stats.decisionKinds.bid}, kitty ${total.stats.decisionKinds.kitty}, play ${total.stats.decisionKinds.play}`,
     `Decision type runtime: bid ${total.stats.decisionKindRuntimeMs.bid.toFixed(1)} ms, kitty ${total.stats.decisionKindRuntimeMs.kitty.toFixed(
@@ -548,13 +588,13 @@ export function formatBenchmarkSummary({ total, seed, mode, candidateMode, games
     )} ms, play ${total.stats.decisionKindRuntimeMs.play.toFixed(1)} ms`,
     `Search config: time ${search.timeLimitMs} ms, max samples ${search.samples}, seed ${search.seed}, min samples ${search.minSamples}`,
     `Search decisions: ${total.stats.search.decisions}`,
-    `Search fallback decisions: ${total.stats.search.fallbacks} (${searchFallbackRate})`,
+    `Search fallback decisions: ${total.stats.search.fallbacks} (${pct(total.stats.search.fallbacks, total.stats.search.decisions)})`,
     `Search samples evaluated: ${total.stats.search.samples}`,
-    `Average search samples/decision: ${averageSamplesPerSearchDecision.toFixed(2)}`,
-    `Average search ms/decision: ${averageSearchMsPerDecision.toFixed(2)}`,
+    `Average search samples/decision: ${metrics.averageSearchSamplesPerDecision.toFixed(2)}`,
+    `Average search ms/decision: ${metrics.averageSearchMsPerDecision.toFixed(2)}`,
     `Search timeout count: ${total.stats.search.timeouts}`,
     `Elapsed time: ${elapsedMs.toFixed(1)} ms`,
-    `Average runtime: ${(elapsedMs / total.games).toFixed(2)} ms/game, ${(totalDecisionRuntimeMs / totalDecisions).toFixed(
+    `Average runtime: ${metrics.averageRuntimeMsPerGame.toFixed(2)} ms/game, ${metrics.averageMeasuredMsPerDecision.toFixed(
       4,
     )} ms/decision`,
     `Measured AI decision time: candidate ${total.stats.decisionRuntimeMs.candidate.toFixed(1)} ms, baseline ${total.stats.decisionRuntimeMs.baseline.toFixed(
