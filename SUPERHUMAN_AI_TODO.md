@@ -75,6 +75,9 @@ Non-negotiables:
 - [x] Add a setting or internal difficulty flag so the current heuristic can remain available as a fallback.
 - [x] Add timeout handling, worker failure fallback, and telemetry/logging for search timeouts in development.
 - [x] Smoke test a live game in the browser after any integration change.
+- [x] Add a repeatable production-preview browser reliability harness for opt-in Strong mode.
+- [x] Add service-worker/cache sanity checks so stale app or search-worker bundles fail browser reliability runs.
+- [x] Validate normal, forced-timeout, multi-hand, and CPU-throttled Strong-mode browser runs.
 - [ ] Acceptance: local gameplay remains responsive on desktop and mobile viewports, with no console errors.
 
 ## Candidate File Layout
