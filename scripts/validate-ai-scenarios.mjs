@@ -145,6 +145,83 @@ function hiddenHand(playerId) {
 }
 
 {
+  const playableHand = sortHand([
+    card("Red", 14),
+    card("Red", 13),
+    card("Red", 12),
+    card("Green", 10),
+    card("Black", 5),
+    card("Yellow", 1),
+    card("ROOK", 0),
+    card("Red", 2),
+    card("Green", 3),
+    card("Black", 4),
+    card("Yellow", 6),
+    card("Red", 7),
+    card("Green", 8),
+  ]);
+  const hiddenKitty = hiddenHand(5);
+  const game = baseGame({
+    hands: [hiddenHand(0), playableHand, hiddenHand(2), hiddenHand(3)],
+    kitty: hiddenKitty,
+    dealer: 0,
+    currentTurn: 1,
+    bidInfo: {
+      active: true,
+      highBid: 105,
+      bidder: 3,
+      passed: [false, false, false, false],
+    },
+    scores: { us: 180, them: 240 },
+  });
+
+  assert.doesNotThrow(() => chooseBotBid(game, 1, 150), "bid EV does not inspect hidden hands or hidden kitty");
+}
+
+{
+  const fullHand = sortHand([
+    card("Red", 14),
+    card("Red", 13),
+    card("Red", 10),
+    card("Red", 5),
+    card("Green", 14),
+    card("Green", 10),
+    card("Black", 1),
+    card("Yellow", 1),
+    card("Red", 2),
+    card("Green", 3),
+    card("Black", 4),
+    card("Yellow", 6),
+    card("Red", 7),
+    card("Green", 8),
+    card("Black", 9),
+    card("Yellow", 11),
+    card("Red", 12),
+    card("ROOK", 0),
+  ]);
+  const game = baseGame({
+    hands: [hiddenHand(0), fullHand, hiddenHand(2), hiddenHand(3)],
+    kitty: hiddenHand(5),
+    dealer: 0,
+    currentTurn: 1,
+    bidInfo: {
+      active: false,
+      highBid: 115,
+      bidder: 1,
+      passed: [false, false, false, false],
+    },
+    scores: { us: 220, them: 160 },
+  });
+  const plan = chooseBotKittyPlan(fullHand, { game, playerId: 1 });
+
+  assert.equal(
+    isValidKittyDiscard(fullHand, plan.discards, plan.trump),
+    true,
+    "contextual kitty rollout plan remains legal without hidden-card access",
+  );
+}
+
+{
   const redLead = card("Red", 10);
   const redFollower = card("Red", 2);
   const offSuitPoint = card("Green", 14);

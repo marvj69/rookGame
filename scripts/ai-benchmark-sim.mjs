@@ -326,7 +326,9 @@ function runBidding(state, candidateTeam, stats, strategies) {
 function chooseKitty(state, winner, candidateTeam, stats, strategies) {
   const strategy = getStrategy(winner, candidateTeam, strategies);
   const label = strategyLabelForPlayer(winner, candidateTeam);
-  const plan = measureDecision(stats, label, "kitty", () => strategy.chooseBotKittyPlan(state.hands[winner]));
+  const plan = measureDecision(stats, label, "kitty", () =>
+    strategy.chooseBotKittyPlan(state.hands[winner], { game: state, playerId: winner }),
+  );
 
   if (!isValidKittyDiscard(state.hands[winner], plan.discards, plan.trump)) {
     failIllegal(stats, `Strategy ${label} returned an illegal kitty discard.`);
@@ -538,6 +540,29 @@ export function getBenchmarkMetrics(total, elapsedMs = 0) {
     averageMeasuredMsPerDecision: totalDecisions > 0 ? totalDecisionRuntimeMs / totalDecisions : 0,
     candidateDecisionRuntimeMs: total.stats.decisionRuntimeMs.candidate,
     baselineDecisionRuntimeMs: total.stats.decisionRuntimeMs.baseline,
+  };
+}
+
+export function createBenchmarkFingerprint(total) {
+  return {
+    games: total.games,
+    wins: total.wins,
+    margin: total.margin,
+    rounds: total.stats.rounds,
+    bids: { ...total.stats.bids },
+    roundBids: { ...total.stats.roundBids },
+    madeBids: { ...total.stats.madeBids },
+    failedBids: { ...total.stats.failedBids },
+    roundScore: { ...total.stats.roundScore },
+    decisions: { ...total.stats.decisions },
+    decisionKinds: { ...total.stats.decisionKinds },
+    search: {
+      decisions: total.stats.search.decisions,
+      fallbacks: total.stats.search.fallbacks,
+      samples: total.stats.search.samples,
+      timeouts: total.stats.search.timeouts,
+    },
+    illegalMoves: total.stats.illegalMoves,
   };
 }
 

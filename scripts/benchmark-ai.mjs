@@ -1,5 +1,6 @@
 import { availableParallelism } from "node:os";
 import { performance } from "node:perf_hooks";
+import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import * as candidateAi from "../src/ai.js";
 import * as baselineAi from "./current-ai-baseline.mjs";
@@ -11,7 +12,7 @@ import {
   simulateBenchmarkRange,
 } from "./ai-benchmark-sim.mjs";
 
-function resolveWorkerCount(requestedWorkerCount, gamesPerSide) {
+export function resolveWorkerCount(requestedWorkerCount, gamesPerSide) {
   if (gamesPerSide <= 1) return 1;
 
   if (requestedWorkerCount === "auto") {
@@ -21,7 +22,7 @@ function resolveWorkerCount(requestedWorkerCount, gamesPerSide) {
   return Math.max(1, Math.min(gamesPerSide, Math.floor(requestedWorkerCount)));
 }
 
-function splitRanges(gamesPerSide, workerCount) {
+export function splitRanges(gamesPerSide, workerCount) {
   const ranges = [];
   const baseSize = Math.floor(gamesPerSide / workerCount);
   const remainder = gamesPerSide % workerCount;
@@ -38,7 +39,7 @@ function splitRanges(gamesPerSide, workerCount) {
   return ranges;
 }
 
-function runWorker({ startIndex, gamesPerSide, seed, options }) {
+export function runWorker({ startIndex, gamesPerSide, seed, options }) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("./ai-benchmark-worker.mjs", import.meta.url), {
       workerData: { startIndex, gamesPerSide, seed, options },
@@ -60,7 +61,7 @@ function runWorker({ startIndex, gamesPerSide, seed, options }) {
   });
 }
 
-async function runParallelBenchmark({ seed, gamesPerSide, workerCount, benchmarkOptions }) {
+export async function runParallelBenchmark({ seed, gamesPerSide, workerCount, benchmarkOptions }) {
   const total = createBenchmarkTotal();
   const ranges = splitRanges(gamesPerSide, workerCount);
   const results = await Promise.all(ranges.map((range) => runWorker({ ...range, seed, options: benchmarkOptions })));
@@ -74,29 +75,46 @@ async function runParallelBenchmark({ seed, gamesPerSide, workerCount, benchmark
   return total;
 }
 
-const options = parseBenchmarkArgs();
-const workerCount = resolveWorkerCount(options.workerCount, options.gamesPerSide);
-const startedAt = performance.now();
-const total =
-  workerCount > 1
-    ? await runParallelBenchmark({ ...options, workerCount, benchmarkOptions: options })
-    : simulateBenchmarkRange({
-        seed: options.seed,
-        gamesPerSide: options.gamesPerSide,
-        strategies: { candidateAi, baselineAi },
-        options,
-      });
-const elapsedMs = performance.now() - startedAt;
+export async function runBenchmark(options = parseBenchmarkArgs()) {
+  const workerCount = resolveWorkerCount(options.workerCount, options.gamesPerSide);
+  const startedAt = performance.now();
+  const total =
+    workerCount > 1
+      ? await runParallelBenchmark({ ...options, workerCount, benchmarkOptions: options })
+      : simulateBenchmarkRange({
+          seed: options.seed,
+          gamesPerSide: options.gamesPerSide,
+          strategies: { candidateAi, baselineAi },
+          options,
+        });
+  const elapsedMs = performance.now() - startedAt;
 
-console.log(
-  formatBenchmarkSummary({
+  return {
     total,
-    seed: options.seed,
-    mode: options.mode,
-    candidateMode: options.candidateMode,
-    gamesPerSide: options.gamesPerSide,
     elapsedMs,
     workerCount,
-    search: options.search,
-  }).join("\n"),
-);
+    options,
+  };
+}
+
+function isMainModule() {
+  return process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+}
+
+if (isMainModule()) {
+  const result = await runBenchmark(parseBenchmarkArgs());
+  const { total, elapsedMs, workerCount, options } = result;
+
+  console.log(
+    formatBenchmarkSummary({
+      total,
+      seed: options.seed,
+      mode: options.mode,
+      candidateMode: options.candidateMode,
+      gamesPerSide: options.gamesPerSide,
+      elapsedMs,
+      workerCount,
+      search: options.search,
+    }).join("\n"),
+  );
+}

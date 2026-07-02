@@ -742,7 +742,7 @@ export default function App() {
     let chosenTrump = "Red";
 
     mutateGame((nextState) => {
-      const plan = chooseBotKittyPlan(nextState.hands[winner]);
+      const plan = chooseBotKittyPlan(nextState.hands[winner], { game: nextState, playerId: winner });
       const discards = plan.discards;
       chosenTrump = plan.trump;
 

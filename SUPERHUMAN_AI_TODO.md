@@ -30,7 +30,7 @@ Non-negotiables:
 - [x] Add a full benchmark mode for confidence work, such as 1000+ mirrored games.
 - [x] Parallelize benchmark games with Node worker threads or process sharding.
 - [x] Print candidate win rate, average margin, round-score average, bid win count, bid make rate, illegal move count, and elapsed time.
-- [ ] Acceptance: full benchmark can run in a practical amount of time on this machine and produces deterministic results for a fixed seed.
+- [x] Acceptance: full benchmark can run in a practical amount of time on this machine and produces deterministic results for a fixed seed. Validate with `npm run ai:benchmark:acceptance -- --seed=20260618`.
 
 ## Phase 2 - Build an Imperfect-Information Model
 
@@ -54,11 +54,11 @@ Non-negotiables:
 
 ## Phase 4 - Upgrade Bidding and Kitty with Rollout EV
 
-- [ ] Evaluate bid ceilings by simulated expected value rather than only static hand strength.
-- [ ] Include partner/opponent bidding context, dealer position, current score, and risk of going set.
-- [ ] Score trump choice and kitty discards by rollout outcomes after legal discard enumeration.
-- [ ] Preserve the existing exhaustive legal-discard guard as the final legality check.
-- [ ] Acceptance: bid make rate improves or remains stable while average margin improves over the benchmark suite.
+- [x] Evaluate bid ceilings by simulated expected value rather than only static hand strength.
+- [x] Include partner/opponent bidding context, dealer position, current score, and risk of going set.
+- [x] Score trump choice and kitty discards by rollout outcomes after legal discard enumeration.
+- [x] Preserve the existing exhaustive legal-discard guard as the final legality check.
+- [x] Acceptance: bid make rate improves or remains stable while average margin improves over the benchmark suite. Evidence: `npm run ai:benchmark -- --mode=standard --play-search --seed=20260618 --parallel --search-ms=30 --search-samples=8` produced 270/400 candidate wins, +174.0 average margin, 75.5% candidate bid make rate, and 0 illegal moves; `npm run ai:benchmark:acceptance -- --seed=20260618` produced deterministic 1145/2000 current-mode wins, +67.2 average margin, and 0 illegal moves in 66.1s / 65.2s.
 
 ## Phase 5 - Tune Through Self-Play
 
@@ -66,8 +66,8 @@ Non-negotiables:
 - [x] Add a tournament script that compares candidate configs against the checked-in baseline.
 - [x] Use seeded self-play to tune weights before considering neural models.
 - [x] Run a broader holdout confirmation before live integration without tuning on those holdout seeds.
-- [ ] Store winning config changes with benchmark output in the PR or commit message.
-- [ ] Acceptance: each merged tuning change has reproducible benchmark evidence and does not rely on a single lucky seed.
+- [x] Store winning config changes with benchmark output in the PR or commit message.
+- [x] Acceptance: each merged tuning change has reproducible benchmark evidence and does not rely on a single lucky seed. Evidence: `npm run ai:tournament -- --seeds=20260618-20260620 --games=20 --candidates=current,search --search-config=default --workers=auto --no-json` produced aggregate search 89/120 wins, +214.8 average margin, 77.0% bid make, and 0 illegal moves; the same benchmark evidence is stored in the commit message for this change.
 
 ## Phase 6 - Browser Integration
 
@@ -78,12 +78,12 @@ Non-negotiables:
 - [x] Add a repeatable production-preview browser reliability harness for opt-in Strong mode.
 - [x] Add service-worker/cache sanity checks so stale app or search-worker bundles fail browser reliability runs.
 - [x] Validate normal, forced-timeout, multi-hand, and CPU-throttled Strong-mode browser runs.
-- [ ] Acceptance: local gameplay remains responsive on desktop and mobile viewports, with no console errors.
+- [x] Acceptance: local gameplay remains responsive on desktop and mobile viewports, with no console errors. Evidence: in-app browser QA on `http://127.0.0.1:4190/` passed desktop game start/pass and 390x844 mobile gameplay checks with no console warnings/errors or horizontal overflow; `npm run ai:browser-reliability -- --games=1 --hands=1 --no-json`, `--cpu-throttle=4`, and `--forced-timeout` all passed production-preview cache, console, worker, stale-result, and illegal-result checks.
 
 ## Candidate File Layout
 
-- [ ] Keep `src/ai.js` as the public compatibility facade.
-- [ ] Consider moving existing heuristic helpers into `src/ai/heuristics.js`.
+- [x] Keep `src/ai.js` as the public compatibility facade.
+- [x] Move existing heuristic helpers into `src/ai/heuristics.js`. Verified with `npm test`, `npm run build`, and `npm run ai:benchmark -- --quick --play-search --seed=20260618 --workers=2 --search-ms=30 --search-samples=8`.
 - [x] Add `src/ai/belief.js` for public-state inference and sampled hidden deals.
 - [x] Add `src/ai/search.js` for Monte Carlo and endgame search.
 - [x] Add `src/ai/evaluation.js` for scoring functions and tunable weights.
