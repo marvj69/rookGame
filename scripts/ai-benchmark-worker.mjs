@@ -1,14 +1,11 @@
 import { parentPort, workerData } from "node:worker_threads";
-import * as candidateAi from "../src/ai.js";
-import * as baselineAi from "./current-ai-baseline.mjs";
+import { createBenchmarkStrategies } from "./ai-engines.mjs";
 import { simulateBenchmarkRange } from "./ai-benchmark-sim.mjs";
 
 try {
-  const candidateEngine = workerData.candidateEngine ?? "current";
-  const strategies = {
-    candidateAi: candidateEngine === "baseline" ? baselineAi : candidateAi,
-    baselineAi,
-  };
+  const candidateEngine = workerData.candidateEngine ?? workerData.options?.candidateEngineId ?? workerData.options?.candidateMode;
+  const opponentEngine = workerData.opponentEngine ?? workerData.options?.opponentEngineId;
+  const strategies = createBenchmarkStrategies({ candidate: candidateEngine, opponent: opponentEngine });
   const total = simulateBenchmarkRange({
     startIndex: workerData.startIndex,
     gamesPerSide: workerData.gamesPerSide,

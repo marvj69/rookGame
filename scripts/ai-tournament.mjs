@@ -1,9 +1,15 @@
 import { availableParallelism } from "node:os";
 import { performance } from "node:perf_hooks";
 import { Worker } from "node:worker_threads";
-import * as candidateAi from "../src/ai.js";
 import { NAMED_SEARCH_CONFIGS, normalizeSearchConfig } from "../src/ai/config.js";
-import * as baselineAi from "./current-ai-baseline.mjs";
+import {
+  CHALLENGER_ENGINE_ID,
+  CHAMPION_ENGINE_ID,
+  createBenchmarkStrategies,
+  expandOpponentEngineIds,
+  getBenchmarkEngine,
+  resolveEngineId,
+} from "./ai-engines.mjs";
 import {
   createBenchmarkTotal,
   getBenchmarkMetrics,
@@ -136,10 +142,13 @@ function resolveWorkerCount(rawWorkerCount, jobCount) {
   return Number.isFinite(numeric) ? Math.max(1, Math.min(jobCount, Math.floor(numeric))) : 1;
 }
 
-function createBenchmarkOptions({ candidateMode, search, gamesPerSide }) {
+function createBenchmarkOptions({ candidateEngineId, opponentEngineId, search, gamesPerSide }) {
   return {
     mode: "tournament",
-    candidateMode,
+    candidateMode: candidateEngineId,
+    candidateEngineId,
+    opponentEngineId,
+    opponentEngineIds: [opponentEngineId],
     gamesPerSide,
     seed: 0,
     workerCount: 1,
@@ -147,57 +156,41 @@ function createBenchmarkOptions({ candidateMode, search, gamesPerSide }) {
   };
 }
 
-function createJobs({ seeds, candidates, searchConfigs, gamesPerSide }) {
+function searchConfigsForEngine(engine, searchConfigs) {
+  return engine.usesSearch ? searchConfigs : [searchConfigs[0]];
+}
+
+function createJobs({ seeds, candidates, opponents, searchConfigs, gamesPerSide }) {
   const jobs = [];
 
   seeds.forEach((seed) => {
-    if (candidates.includes("baseline")) {
-      jobs.push({
-        id: `baseline:baseline:${seed}`,
-        seed,
-        engine: "baseline",
-        configLabel: "baseline",
-        candidateEngine: "baseline",
-        options: createBenchmarkOptions({ candidateMode: "current", search: searchConfigs[0], gamesPerSide }),
-        gamesPerSide,
-      });
-    }
-
-    if (candidates.includes("current")) {
-      jobs.push({
-        id: `current:current:${seed}`,
-        seed,
-        engine: "current",
-        configLabel: "current",
-        candidateEngine: "current",
-        options: createBenchmarkOptions({ candidateMode: "current", search: searchConfigs[0], gamesPerSide }),
-        gamesPerSide,
-      });
-    }
-
-    if (candidates.includes("search")) {
-      searchConfigs.forEach((searchConfig) => {
-        jobs.push({
-          id: `search:${searchConfig.label}:${seed}`,
-          seed,
-          engine: "search",
-          configLabel: searchConfig.label,
-          candidateEngine: "current",
-          options: createBenchmarkOptions({ candidateMode: "search", search: searchConfig, gamesPerSide }),
-          gamesPerSide,
+    opponents.forEach((opponentEngineId) => {
+      candidates.forEach((candidateEngineId) => {
+        const candidateEngine = getBenchmarkEngine(candidateEngineId);
+        searchConfigsForEngine(candidateEngine, searchConfigs).forEach((searchConfig) => {
+          const configLabel = candidateEngine.usesSearch ? searchConfig.label : "heuristic";
+          jobs.push({
+            id: `${candidateEngine.id}:vs:${opponentEngineId}:${configLabel}:${seed}`,
+            seed,
+            engine: candidateEngine.id,
+            opponent: opponentEngineId,
+            configLabel,
+            candidateEngine: candidateEngine.id,
+            opponentEngine: opponentEngineId,
+            options: createBenchmarkOptions({
+              candidateEngineId: candidateEngine.id,
+              opponentEngineId,
+              search: searchConfig,
+              gamesPerSide,
+            }),
+            gamesPerSide,
+          });
         });
       });
-    }
+    });
   });
 
   return jobs;
-}
-
-function strategiesForEngine(candidateEngine) {
-  return {
-    candidateAi: candidateEngine === "baseline" ? baselineAi : candidateAi,
-    baselineAi,
-  };
 }
 
 function runJobLocal(job) {
@@ -205,7 +198,10 @@ function runJobLocal(job) {
   const total = simulateBenchmarkRange({
     seed: job.seed,
     gamesPerSide: job.gamesPerSide,
-    strategies: strategiesForEngine(job.candidateEngine),
+    strategies: createBenchmarkStrategies({
+      candidate: job.candidateEngine,
+      opponent: job.opponentEngine,
+    }),
     options: job.options,
   });
   return {
@@ -226,6 +222,7 @@ function runJobWorker(job) {
         gamesPerSide: job.gamesPerSide,
         seed: job.seed,
         candidateEngine: job.candidateEngine,
+        opponentEngine: job.opponentEngine,
         options: job.options,
       },
     });
@@ -274,6 +271,7 @@ function rowFromResult(result) {
   return {
     seed: result.seed,
     engine: result.engine,
+    opponent: result.opponent,
     config: result.configLabel,
     metrics: getBenchmarkMetrics(result.total, result.elapsedMs),
   };
@@ -283,10 +281,11 @@ function aggregateResults(results) {
   const groups = new Map();
 
   results.forEach((result) => {
-    const key = `${result.engine}:${result.configLabel}`;
+    const key = `${result.engine}:${result.opponent}:${result.configLabel}`;
     if (!groups.has(key)) {
       groups.set(key, {
         engine: result.engine,
+        opponent: result.opponent,
         config: result.configLabel,
         seeds: [],
         total: createBenchmarkTotal(),
@@ -302,6 +301,7 @@ function aggregateResults(results) {
 
   return [...groups.values()].map((group) => ({
     engine: group.engine,
+    opponent: group.opponent,
     config: group.config,
     seeds: group.seeds,
     metrics: getBenchmarkMetrics(group.total, group.elapsedMs),
@@ -336,6 +336,7 @@ function tableColumns() {
   return [
     { header: "Seed", value: (row) => row.seed ?? "ALL" },
     { header: "Engine", value: (row) => row.engine },
+    { header: "Opponent", value: (row) => row.opponent },
     { header: "Config", value: (row) => row.config },
     { header: "Games", value: (row) => row.metrics.games },
     { header: "Wins", value: (row) => row.metrics.wins },
@@ -354,6 +355,7 @@ function tableColumns() {
 
 function printTournamentSummary(summary, { includeJson }) {
   console.log(`Tournament seeds: ${summary.seeds.join(", ")}`);
+  console.log(`Tournament opponents: ${summary.opponents.join(", ")}`);
   console.log(`Games per seed per orientation: ${summary.gamesPerSeed}`);
   console.log(`Workers: ${summary.workers}`);
   console.log(`Wall time: ${formatNumber(summary.elapsedMs / 1000, 1)}s`);
@@ -368,7 +370,7 @@ function printTournamentSummary(summary, { includeJson }) {
   }
 }
 
-function summarizeResults({ args, seeds, gamesPerSeed, workers, searchConfigs, results, startedAt }) {
+function summarizeResults({ args, seeds, opponents, gamesPerSeed, workers, searchConfigs, results, startedAt }) {
   const rows = results.map((result) => ({
     ...rowFromResult(result),
     total: result.total,
@@ -376,6 +378,7 @@ function summarizeResults({ args, seeds, gamesPerSeed, workers, searchConfigs, r
 
   return {
     seeds,
+    opponents,
     gamesPerSeed,
     workers,
     searchConfigs: searchConfigs.map((config) => ({
@@ -398,12 +401,14 @@ function summarizeResults({ args, seeds, gamesPerSeed, workers, searchConfigs, r
 
 function createTournamentOptions(args) {
   const seeds = parseSeeds(getArgValue(args, "seeds"), "20260618-20260620");
-  const candidates = (getArgValue(args, "candidates") ?? "baseline,current,search")
+  const candidates = (getArgValue(args, "candidates") ?? `old-baseline,current,${CHALLENGER_ENGINE_ID}`)
     .split(",")
     .map((candidate) => candidate.trim())
-    .filter(Boolean);
-  const invalidCandidate = candidates.find((candidate) => !["baseline", "current", "search"].includes(candidate));
-  if (invalidCandidate) throw new Error(`Unsupported candidate "${invalidCandidate}".`);
+    .filter(Boolean)
+    .map(resolveEngineId);
+  const opponents = expandOpponentEngineIds(getArgValue(args, "opponent"), {
+    includeBothBaselines: hasFlag(args, "both-baselines") || hasFlag(args, "compare-baselines"),
+  });
 
   const searchConfigs = parseSearchConfigs(args);
   const gamesPerSeed = getArgNumber(args, "games", 10, 1);
@@ -412,6 +417,7 @@ function createTournamentOptions(args) {
   return {
     seeds,
     candidates,
+    opponents,
     searchConfigs,
     gamesPerSeed,
     rawWorkers,
@@ -488,6 +494,7 @@ async function runTournament(args, overrides = {}) {
   const jobs = createJobs({
     seeds: options.seeds,
     candidates: options.candidates,
+    opponents: options.opponents,
     searchConfigs: options.searchConfigs,
     gamesPerSide: options.gamesPerSeed,
   });
@@ -498,6 +505,7 @@ async function runTournament(args, overrides = {}) {
   return summarizeResults({
     args,
     seeds: options.seeds,
+    opponents: options.opponents,
     gamesPerSeed: options.gamesPerSeed,
     workers,
     searchConfigs: options.searchConfigs,
@@ -521,7 +529,8 @@ async function runTuning(args) {
 
   const trainSummary = await runTournament(args, {
     seeds: trainSeeds,
-    candidates: ["search"],
+    candidates: [CHALLENGER_ENGINE_ID],
+    opponents: [CHAMPION_ENGINE_ID],
     searchConfigs,
     gamesPerSeed,
     rawWorkers,
@@ -542,7 +551,8 @@ async function runTuning(args) {
 
   const holdoutSummary = await runTournament(args, {
     seeds: holdoutSeeds,
-    candidates: ["baseline", "current", "search"],
+    candidates: ["old-baseline", "current", CHALLENGER_ENGINE_ID],
+    opponents: [CHAMPION_ENGINE_ID],
     searchConfigs: holdoutConfigs,
     gamesPerSeed,
     rawWorkers,
@@ -551,10 +561,10 @@ async function runTuning(args) {
   printTournamentSummary(holdoutSummary, { includeJson: false });
 
   const bestHoldout = holdoutSummary.aggregates.find(
-    (aggregate) => aggregate.engine === "search" && aggregate.config === bestConfig.label,
+    (aggregate) => aggregate.engine === CHALLENGER_ENGINE_ID && aggregate.config === bestConfig.label,
   );
   const defaultHoldout = holdoutSummary.aggregates.find(
-    (aggregate) => aggregate.engine === "search" && aggregate.config === "default",
+    (aggregate) => aggregate.engine === CHALLENGER_ENGINE_ID && aggregate.config === "default",
   );
   const materialMarginGain =
     bestHoldout && defaultHoldout ? bestHoldout.metrics.averageMargin - defaultHoldout.metrics.averageMargin : 0;

@@ -2,11 +2,16 @@ import { availableParallelism } from "node:os";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
-import * as candidateAi from "../src/ai.js";
-import * as baselineAi from "./current-ai-baseline.mjs";
+import {
+  evaluateAdvancementGate,
+  formatAdvancementGateReport,
+  parseAdvancementGate,
+} from "./ai-advancement-gates.mjs";
+import { createBenchmarkStrategies, getBenchmarkEngine } from "./ai-engines.mjs";
 import {
   createBenchmarkTotal,
   formatBenchmarkSummary,
+  getBenchmarkMetrics,
   mergeBenchmarkTotals,
   parseBenchmarkArgs,
   simulateBenchmarkRange,
@@ -77,6 +82,8 @@ export async function runParallelBenchmark({ seed, gamesPerSide, workerCount, be
 
 export async function runBenchmark(options = parseBenchmarkArgs()) {
   const workerCount = resolveWorkerCount(options.workerCount, options.gamesPerSide);
+  const candidateEngine = getBenchmarkEngine(options.candidateEngineId ?? options.candidateMode);
+  const opponentEngine = getBenchmarkEngine(options.opponentEngineId);
   const startedAt = performance.now();
   const total =
     workerCount > 1
@@ -84,17 +91,44 @@ export async function runBenchmark(options = parseBenchmarkArgs()) {
       : simulateBenchmarkRange({
           seed: options.seed,
           gamesPerSide: options.gamesPerSide,
-          strategies: { candidateAi, baselineAi },
+          strategies: createBenchmarkStrategies({
+            candidate: candidateEngine.id,
+            opponent: opponentEngine.id,
+          }),
           options,
         });
   const elapsedMs = performance.now() - startedAt;
+  const advancementGate = parseAdvancementGate(options.advancementGate);
+  const gateReport = advancementGate
+    ? evaluateAdvancementGate({
+        metrics: getBenchmarkMetrics(total, elapsedMs),
+        gate: advancementGate,
+        mode: options.mode,
+        candidateEngineId: candidateEngine.id,
+        opponentEngineId: opponentEngine.id,
+      })
+    : null;
 
   return {
     total,
     elapsedMs,
     workerCount,
     options,
+    candidateEngine,
+    opponentEngine,
+    gateReport,
   };
+}
+
+export async function runBenchmarkSuite(options = parseBenchmarkArgs()) {
+  const opponentEngineIds = options.opponentEngineIds?.length ? options.opponentEngineIds : [options.opponentEngineId];
+  const results = [];
+
+  for (const opponentEngineId of opponentEngineIds) {
+    results.push(await runBenchmark({ ...options, opponentEngineId }));
+  }
+
+  return results;
 }
 
 function isMainModule() {
@@ -102,19 +136,35 @@ function isMainModule() {
 }
 
 if (isMainModule()) {
-  const result = await runBenchmark(parseBenchmarkArgs());
-  const { total, elapsedMs, workerCount, options } = result;
+  const results = await runBenchmarkSuite(parseBenchmarkArgs());
+  let failedGate = false;
 
-  console.log(
-    formatBenchmarkSummary({
-      total,
-      seed: options.seed,
-      mode: options.mode,
-      candidateMode: options.candidateMode,
-      gamesPerSide: options.gamesPerSide,
-      elapsedMs,
-      workerCount,
-      search: options.search,
-    }).join("\n"),
-  );
+  results.forEach((result, index) => {
+    const { total, elapsedMs, workerCount, options, candidateEngine, opponentEngine, gateReport } = result;
+    if (index > 0) console.log("");
+    console.log(
+      formatBenchmarkSummary({
+        total,
+        seed: options.seed,
+        mode: options.mode,
+        candidateMode: options.candidateMode,
+        candidate: candidateEngine.id,
+        opponent: opponentEngine.id,
+        gamesPerSide: options.gamesPerSide,
+        elapsedMs,
+        workerCount,
+        search: options.search,
+      }).join("\n"),
+    );
+
+    if (gateReport) {
+      console.log("");
+      console.log(formatAdvancementGateReport(gateReport).join("\n"));
+      failedGate = failedGate || !gateReport.passed;
+    }
+  });
+
+  if (failedGate) {
+    process.exitCode = 1;
+  }
 }

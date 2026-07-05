@@ -1,4 +1,5 @@
 import { createBenchmarkFingerprint, BENCHMARK_MODE_DEFAULT_GAMES, parseBenchmarkArgs } from "./ai-benchmark-sim.mjs";
+import { formatAdvancementGateReport } from "./ai-advancement-gates.mjs";
 import { runBenchmark } from "./benchmark-ai.mjs";
 
 function getArgValue(args, name) {
@@ -22,10 +23,22 @@ function createFullBenchmarkOptions(args) {
   const seed = getArgNumber(args, "seed", 20260618);
   const games = getArgNumber(args, "games", BENCHMARK_MODE_DEFAULT_GAMES.full);
   const rawWorkers = getArgValue(args, "workers");
+  const candidate = getArgValue(args, "candidate");
+  const opponent = getArgValue(args, "opponent");
+  const gate = getArgValue(args, "gate");
   const benchmarkArgs = ["--full", `--seed=${seed}`, `--games=${games}`];
 
   if (rawWorkers) {
     benchmarkArgs.push(`--workers=${rawWorkers}`);
+  }
+  if (candidate) {
+    benchmarkArgs.push(`--candidate=${candidate}`);
+  }
+  if (opponent) {
+    benchmarkArgs.push(`--opponent=${opponent}`);
+  }
+  if (gate) {
+    benchmarkArgs.push(`--gate=${gate}`);
   }
 
   return parseBenchmarkArgs(benchmarkArgs);
@@ -58,6 +71,19 @@ for (let runIndex = 0; runIndex < runs; runIndex += 1) {
     throw new Error(
       `Full benchmark run ${runIndex + 1} took ${formatSeconds(result.elapsedMs)}, above ${formatSeconds(maxElapsedMs)}.`,
     );
+  }
+
+  if (result.total.stats.illegalMoves > 0) {
+    throw new Error(
+      `Full benchmark run ${runIndex + 1} had illegal decisions: ${JSON.stringify(result.total.stats.illegal)}.`,
+    );
+  }
+
+  if (result.gateReport) {
+    console.log(formatAdvancementGateReport(result.gateReport, { includeRequiredCommands: runIndex === 0 }).join("\n"));
+    if (!result.gateReport.passed) {
+      throw new Error(`Full benchmark run ${runIndex + 1} failed the ${result.gateReport.gate.id} advancement gate.`);
+    }
   }
 
   if (expectedFingerprint === null) {

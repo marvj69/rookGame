@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import * as champion from "./champions/strong-search-2026-07-02.mjs";
 import * as baselineAi from "./current-ai-baseline.mjs";
 import { createBenchmarkFingerprint, simulateBenchmarkRange } from "./ai-benchmark-sim.mjs";
+import { CHAMPION_ENGINE_ID, createBenchmarkStrategies } from "./ai-engines.mjs";
 import { buildDeck, getLeadColor, isValidMove, sortHand } from "../src/game.js";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
@@ -127,5 +128,50 @@ const fingerprint = createBenchmarkFingerprint(quickTotal);
 
 assert.equal(fingerprint.games, 2, "champion should run through benchmark simulation as an importable strategy");
 assert.equal(fingerprint.illegalMoves, 0, "champion benchmark smoke should stay legal");
+
+const championSelfOptions = {
+  mode: "snapshot-validation",
+  candidateMode: CHAMPION_ENGINE_ID,
+  candidateEngineId: CHAMPION_ENGINE_ID,
+  opponentEngineId: CHAMPION_ENGINE_ID,
+  opponentEngineIds: [CHAMPION_ENGINE_ID],
+  gamesPerSide: 1,
+  seed: 20260702,
+  workerCount: 1,
+  search: champion.normalizeSearchConfig({
+    seed: 20260702,
+    samples: 1,
+    minSamples: 1,
+    timeLimitMs: 500,
+  }),
+};
+const championSelfStrategies = createBenchmarkStrategies({
+  candidate: CHAMPION_ENGINE_ID,
+  opponent: CHAMPION_ENGINE_ID,
+});
+const firstChampionSelfTotal = simulateBenchmarkRange({
+  seed: championSelfOptions.seed,
+  gamesPerSide: championSelfOptions.gamesPerSide,
+  strategies: championSelfStrategies,
+  options: championSelfOptions,
+});
+const secondChampionSelfTotal = simulateBenchmarkRange({
+  seed: championSelfOptions.seed,
+  gamesPerSide: championSelfOptions.gamesPerSide,
+  strategies: championSelfStrategies,
+  options: championSelfOptions,
+});
+const firstChampionSelfFingerprint = createBenchmarkFingerprint(firstChampionSelfTotal);
+const secondChampionSelfFingerprint = createBenchmarkFingerprint(secondChampionSelfTotal);
+
+assert.deepEqual(
+  secondChampionSelfFingerprint,
+  firstChampionSelfFingerprint,
+  "champion self-play fingerprint should be deterministic for fixed seeds",
+);
+assert.equal(firstChampionSelfFingerprint.games, 2, "champion self-play should run one mirrored game pair");
+assert.equal(firstChampionSelfFingerprint.wins, 1, "champion self-play should split mirrored games 50/50");
+assert.equal(firstChampionSelfFingerprint.margin, 0, "champion self-play mirrored margin should cancel out");
+assert.equal(firstChampionSelfFingerprint.illegalMoves, 0, "champion self-play should stay legal");
 
 console.log("Champion snapshot validation passed.");

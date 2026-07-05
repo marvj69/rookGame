@@ -45,8 +45,10 @@ export const championMetadata = Object.freeze({
   validationCommands: Object.freeze([
     "npm test",
     "npm run build",
-    "npm run ai:benchmark -- --mode=standard --candidate=search --parallel --seed=20260702",
-    "npm run ai:tournament -- --seeds=20260618-20260620 --games=20 --candidates=baseline,current,search --workers=auto --no-json",
+    "npm run ai:benchmark -- --mode=quick --candidate=challenger --opponent=champion-2026-07-02 --parallel --seed=20260702",
+    "npm run ai:benchmark -- --mode=standard --candidate=challenger --opponent=champion-2026-07-02 --gate=consideration --parallel --seed=20260702",
+    "npm run ai:benchmark:acceptance -- --candidate=challenger --opponent=champion-2026-07-02 --gate=promotion --workers=auto",
+    "npm run ai:tournament -- --seeds=20260618-20260620 --games=20 --candidates=champion-2026-07-02,challenger --opponent=champion-2026-07-02 --workers=auto --no-json",
     "npm run ai:browser-reliability -- --games=1 --hands=1 --no-json",
   ]),
   knownEvidence: Object.freeze({

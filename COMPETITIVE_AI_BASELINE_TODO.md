@@ -26,20 +26,20 @@ Current evidence from 2026-07-02:
 
 ## Phase 2 - Upgrade Benchmark Scripts to Support Champion Play
 
-- [ ] Add benchmark flags such as `--opponent=champion-2026-07-02` and `--candidate=challenger`.
-- [ ] Keep the old baseline available, but make the champion snapshot the default competitive opponent for future AI work.
-- [ ] Print both old-baseline and champion-baseline summaries when requested.
-- [ ] Add deterministic fingerprint output for champion-vs-champion runs.
-- [ ] Acceptance: champion vs itself produces a stable 50/50 mirrored result fingerprint for fixed seeds.
+- [x] Add benchmark flags such as `--opponent=champion-2026-07-02` and `--candidate=challenger`.
+- [x] Keep the old baseline available, but make the champion snapshot the default competitive opponent for future AI work.
+- [x] Print both old-baseline and champion-baseline summaries when requested.
+- [x] Add deterministic fingerprint output for champion-vs-champion runs.
+- [x] Acceptance: champion vs itself produces a stable 50/50 mirrored result fingerprint for fixed seeds.
 
 ## Phase 3 - Define Advancement Gates
 
-- [ ] Require 0 illegal bids, discards, and plays in every run.
-- [ ] Require no hidden-card access in live play or benchmark search.
-- [ ] Require challenger to beat champion by at least 55% over a standard holdout suite before considering it an improvement.
-- [ ] Require challenger to beat champion by at least 60% over a larger full suite before replacing the champion.
-- [ ] Require average margin and bid make rate to improve or remain defensible; do not accept a higher win rate caused by reckless bidding variance alone.
-- [ ] Require `npm test`, `npm run build`, quick benchmark, full benchmark, tournament, and browser Strong-mode reliability before promoting a new champion.
+- [x] Require 0 illegal bids, discards, and plays in every run.
+- [x] Require no hidden-card access in live play or benchmark search.
+- [x] Require challenger to beat champion by at least 55% over a standard holdout suite before considering it an improvement.
+- [x] Require challenger to beat champion by at least 60% over a larger full suite before replacing the champion.
+- [x] Require average margin and bid make rate to improve or remain defensible; do not accept a higher win rate caused by reckless bidding variance alone.
+- [x] Require `npm test`, `npm run build`, quick benchmark, full benchmark, tournament, and browser Strong-mode reliability before promoting a new champion.
 
 ## Phase 4 - Build a Holdout Seed Protocol
 
@@ -82,8 +82,10 @@ After the champion module exists, the expected validation flow should look like:
 ```sh
 npm test
 npm run build
-npm run ai:benchmark -- --mode=standard --candidate=challenger --opponent=champion-2026-07-02 --parallel --seed=20260702
-npm run ai:tournament -- --seeds=<locked-holdout-seeds> --games=<holdout-games> --candidates=champion-2026-07-02,challenger --workers=auto --no-json
+npm run ai:benchmark -- --mode=quick --candidate=challenger --opponent=champion-2026-07-02 --parallel --seed=20260702
+npm run ai:benchmark -- --mode=standard --candidate=challenger --opponent=champion-2026-07-02 --gate=consideration --parallel --seed=20260702
+npm run ai:benchmark:acceptance -- --candidate=challenger --opponent=champion-2026-07-02 --gate=promotion --workers=auto
+npm run ai:tournament -- --seeds=<locked-holdout-seeds> --games=<holdout-games> --candidates=champion-2026-07-02,challenger --opponent=champion-2026-07-02 --workers=auto --no-json
 npm run ai:browser-reliability -- --games=1 --hands=1 --no-json
 ```
 

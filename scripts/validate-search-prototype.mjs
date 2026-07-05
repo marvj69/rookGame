@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { evaluateSampledPlayCandidates, getLegalPlayCandidates } from "../src/ai/search.js";
 import { buildDeck, getLeadColor, isValidMove, sortHand } from "../src/game.js";
+import { createPublicSearchView as createBenchmarkPublicSearchView } from "./ai-benchmark-sim.mjs";
 
 const deck = buildDeck();
 
@@ -116,6 +117,41 @@ assert.deepEqual(
   variantResultA.candidates.map((candidate) => [candidate.card.id, candidate.averageScore, candidate.samples]),
   variantResultB.candidates.map((candidate) => [candidate.card.id, candidate.averageScore, candidate.samples]),
   "mutating hidden opponent cards does not change sampled candidate evaluations",
+);
+
+const benchmarkHiddenVariantA = {
+  ...hiddenVariantA,
+  kitty: [card("Red", 2), card("Red", 3), card("Red", 4), card("Red", 5), card("Red", 6)],
+};
+const benchmarkHiddenVariantB = {
+  ...hiddenVariantB,
+  kitty: [card("Black", 2), card("Black", 3), card("Black", 5), card("Black", 10), card("Yellow", 14)],
+};
+const benchmarkPublicA = createBenchmarkPublicSearchView(benchmarkHiddenVariantA, 0);
+const benchmarkPublicB = createBenchmarkPublicSearchView(benchmarkHiddenVariantB, 0);
+
+assert.deepEqual(benchmarkPublicA.kitty, [], "benchmark public search view does not expose kitty cards");
+assert.equal(Object.keys(benchmarkPublicA.hands[1]).length, 0, "benchmark public search view hides player 1 cards");
+assert.equal(Object.keys(benchmarkPublicA.hands[2]).length, 0, "benchmark public search view hides player 2 cards");
+assert.equal(Object.keys(benchmarkPublicA.hands[3]).length, 0, "benchmark public search view hides player 3 cards");
+assert.deepEqual(
+  benchmarkPublicA.hands.map((hand) => hand.length),
+  benchmarkHiddenVariantA.hands.map((hand) => hand.length),
+  "benchmark public search view preserves hand lengths",
+);
+
+const benchmarkPublicResultA = evaluateSampledPlayCandidates(benchmarkPublicA, 0, variantOptions);
+const benchmarkPublicResultB = evaluateSampledPlayCandidates(benchmarkPublicB, 0, variantOptions);
+
+assert.equal(
+  benchmarkPublicResultA.card.id,
+  benchmarkPublicResultB.card.id,
+  "benchmark public search result is stable when hidden hands and kitty are mutated",
+);
+assert.deepEqual(
+  benchmarkPublicResultA.candidates.map((candidate) => [candidate.card.id, candidate.averageScore, candidate.samples]),
+  benchmarkPublicResultB.candidates.map((candidate) => [candidate.card.id, candidate.averageScore, candidate.samples]),
+  "benchmark public search scores are stable when hidden hands and kitty are mutated",
 );
 
 console.log("Search prototype validation passed.");
