@@ -1,3 +1,8 @@
 node_modules/
 dist/
 .DS_Store
+
+# Raw promotion seeds must remain outside the repository. These patterns are a
+# last-resort guard; the holdout runner also rejects in-repository seed files.
+private-holdout-seeds*.txt
+benchmarks/private-seeds*.txt

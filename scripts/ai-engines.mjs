@@ -1,11 +1,17 @@
 import * as challengerAi from "../src/ai.js";
+import {
+  DEFAULT_SEARCH_CONFIG as CHALLENGER_DEFAULT_SEARCH_CONFIG,
+  LIVE_SEARCH_CONFIG as CHALLENGER_LIVE_SEARCH_CONFIG,
+} from "../src/ai/config.js";
 import { evaluateSampledPlayCandidates as evaluateChallengerSearch } from "../src/ai/search.js";
 import * as oldBaselineAi from "./current-ai-baseline.mjs";
-import * as championAi from "./champions/strong-search-2026-07-02.mjs";
+import * as previousChampionAi from "./champions/strong-search-2026-07-02.mjs";
+import * as championAi from "./champions/strong-search-2026-08-11.mjs";
 
 export const CHALLENGER_ENGINE_ID = "challenger";
 export const CURRENT_ENGINE_ID = "current";
 export const OLD_BASELINE_ENGINE_ID = "old-baseline";
+export const PREVIOUS_CHAMPION_ENGINE_ID = previousChampionAi.championMetadata.id;
 export const CHAMPION_ENGINE_ID = championAi.championMetadata.id;
 
 const ENGINE_DEFINITIONS = Object.freeze({
@@ -15,6 +21,8 @@ const ENGINE_DEFINITIONS = Object.freeze({
     ai: challengerAi,
     evaluateSearch: evaluateChallengerSearch,
     usesSearch: true,
+    defaultSearchConfig: CHALLENGER_DEFAULT_SEARCH_CONFIG,
+    liveSearchConfig: CHALLENGER_LIVE_SEARCH_CONFIG,
   }),
   [CURRENT_ENGINE_ID]: Object.freeze({
     id: CURRENT_ENGINE_ID,
@@ -30,12 +38,24 @@ const ENGINE_DEFINITIONS = Object.freeze({
     evaluateSearch: null,
     usesSearch: false,
   }),
+  [PREVIOUS_CHAMPION_ENGINE_ID]: Object.freeze({
+    id: PREVIOUS_CHAMPION_ENGINE_ID,
+    name: previousChampionAi.championMetadata.name,
+    ai: previousChampionAi,
+    evaluateSearch: previousChampionAi.evaluateSampledPlayCandidates,
+    usesSearch: true,
+    defaultSearchConfig: previousChampionAi.championMetadata.defaultSearchConfig,
+    liveSearchConfig: previousChampionAi.championMetadata.liveSearchConfig,
+    metadata: previousChampionAi.championMetadata,
+  }),
   [CHAMPION_ENGINE_ID]: Object.freeze({
     id: CHAMPION_ENGINE_ID,
     name: championAi.championMetadata.name,
     ai: championAi,
     evaluateSearch: championAi.evaluateSampledPlayCandidates,
     usesSearch: true,
+    defaultSearchConfig: championAi.championMetadata.defaultSearchConfig,
+    liveSearchConfig: championAi.championMetadata.liveSearchConfig,
     metadata: championAi.championMetadata,
   }),
 });
@@ -55,7 +75,10 @@ const ENGINE_ALIASES = Object.freeze({
   "moving-search": CHALLENGER_ENGINE_ID,
   champion: CHAMPION_ENGINE_ID,
   "current-champion": CHAMPION_ENGINE_ID,
-  "strong-search-2026-07-02": CHAMPION_ENGINE_ID,
+  "previous-champion": PREVIOUS_CHAMPION_ENGINE_ID,
+  "strong-search-2026-07-02": PREVIOUS_CHAMPION_ENGINE_ID,
+  [PREVIOUS_CHAMPION_ENGINE_ID]: PREVIOUS_CHAMPION_ENGINE_ID,
+  "strong-search-2026-08-11": CHAMPION_ENGINE_ID,
   [CHAMPION_ENGINE_ID]: CHAMPION_ENGINE_ID,
 });
 

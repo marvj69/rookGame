@@ -486,10 +486,26 @@ function assertCacheSanity(cacheSanity, options) {
 
 function assertReliability(summary, options) {
   const aggregate = summary.aggregate;
+  if (aggregate.searchRequested === 0) {
+    throw new Error("Reliability run did not exercise a Strong AI search decision.");
+  }
   if (aggregate.illegalResults > 0 || aggregate.staleResults > 0 || aggregate.workerErrors > 0) {
     throw new Error(
       `Reliability failure: illegal=${aggregate.illegalResults}, stale=${aggregate.staleResults}, workerErrors=${aggregate.workerErrors}.`,
     );
+  }
+
+  if (options.forcedTimeout) {
+    if (aggregate.timeouts === 0 || aggregate.fallbacks === 0) {
+      throw new Error(
+        `Forced-timeout run did not exercise the fallback path: timeouts=${aggregate.timeouts}, fallbacks=${aggregate.fallbacks}.`,
+      );
+    }
+    return;
+  }
+
+  if (aggregate.searchCompleted === 0) {
+    throw new Error("Reliability run did not complete a Strong AI search decision.");
   }
 
   if (options.failOnFallback && aggregate.fallbacks > 0) {

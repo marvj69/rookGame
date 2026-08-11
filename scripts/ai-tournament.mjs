@@ -1,7 +1,8 @@
 import { availableParallelism } from "node:os";
 import { performance } from "node:perf_hooks";
+import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
-import { NAMED_SEARCH_CONFIGS, normalizeSearchConfig } from "../src/ai/config.js";
+import { LIVE_SEARCH_CONFIG, NAMED_SEARCH_CONFIGS, normalizeSearchConfig } from "../src/ai/config.js";
 import {
   CHALLENGER_ENGINE_ID,
   CHAMPION_ENGINE_ID,
@@ -16,6 +17,14 @@ import {
   mergeBenchmarkTotals,
   simulateBenchmarkRange,
 } from "./ai-benchmark-sim.mjs";
+import {
+  DEFAULT_HOLDOUT_SEED_GROUP_ID,
+  DEFAULT_TOURNAMENT_SEED_GROUP_ID,
+  DEFAULT_TRAINING_SEED_GROUP_ID,
+  assertDisjointSeedSets,
+  parseSeedSpec,
+  resolveSeedGroup,
+} from "./ai-seed-groups.mjs";
 
 function getArgValue(args, name) {
   const match = args.find((arg) => arg.startsWith(`--${name}=`));
@@ -36,28 +45,6 @@ function getArgNumber(args, name, fallback, min = 0) {
   if (rawValue === null) return fallback;
   const value = Number(rawValue);
   return Number.isFinite(value) && value >= min ? value : fallback;
-}
-
-function parseSeeds(rawValue, fallback) {
-  const value = rawValue ?? fallback;
-  return value
-    .split(",")
-    .flatMap((part) => {
-      const trimmed = part.trim();
-      if (!trimmed) return [];
-      const rangeMatch = trimmed.match(/^(\d+)-(\d+)$/);
-      if (!rangeMatch) return [Number(trimmed)];
-
-      const start = Number(rangeMatch[1]);
-      const end = Number(rangeMatch[2]);
-      const step = start <= end ? 1 : -1;
-      const seeds = [];
-      for (let seed = start; seed !== end + step; seed += step) {
-        seeds.push(seed);
-      }
-      return seeds;
-    })
-    .filter((seed) => Number.isInteger(seed));
 }
 
 function parseEvaluationOverrides(rawValue) {
@@ -99,6 +86,10 @@ function withGlobalSearchOverrides(config, args) {
 }
 
 function parseSearchConfigSpec(spec, args) {
+  if (spec === "live") {
+    return withGlobalSearchOverrides(LIVE_SEARCH_CONFIG, args);
+  }
+
   if (NAMED_SEARCH_CONFIGS[spec]) {
     return withGlobalSearchOverrides(NAMED_SEARCH_CONFIGS[spec], args);
   }
@@ -122,13 +113,13 @@ function parseSearchConfigSpec(spec, args) {
   );
 }
 
-function parseSearchConfigs(args) {
+export function parseSearchConfigs(args) {
   const specs = [
     ...getArgValues(args, "search-config"),
     ...getArgValues(args, "search-configs").flatMap((value) => value.split(",")),
   ].filter(Boolean);
 
-  const selectedSpecs = specs.length > 0 ? specs : ["default"];
+  const selectedSpecs = specs.length > 0 ? specs : ["live"];
   return selectedSpecs.map((spec) => parseSearchConfigSpec(spec.trim(), args));
 }
 
@@ -142,7 +133,7 @@ function resolveWorkerCount(rawWorkerCount, jobCount) {
   return Number.isFinite(numeric) ? Math.max(1, Math.min(jobCount, Math.floor(numeric))) : 1;
 }
 
-function createBenchmarkOptions({ candidateEngineId, opponentEngineId, search, gamesPerSide }) {
+export function createBenchmarkOptions({ candidateEngineId, opponentEngineId, search, gamesPerSide }) {
   return {
     mode: "tournament",
     candidateMode: candidateEngineId,
@@ -152,12 +143,19 @@ function createBenchmarkOptions({ candidateEngineId, opponentEngineId, search, g
     gamesPerSide,
     seed: 0,
     workerCount: 1,
+    searchProfile: "live",
+    deterministicSearch: true,
     search: normalizeSearchConfig(search),
+    engineSearchConfigs: {
+      candidate: normalizeSearchConfig(search),
+    },
   };
 }
 
-function searchConfigsForEngine(engine, searchConfigs) {
-  return engine.usesSearch ? searchConfigs : [searchConfigs[0]];
+export function searchConfigsForEngine(engine, searchConfigs) {
+  if (!engine.usesSearch) return [searchConfigs[0]];
+  if (engine.id === CHALLENGER_ENGINE_ID) return searchConfigs;
+  return [normalizeSearchConfig(engine.liveSearchConfig ?? engine.defaultSearchConfig ?? searchConfigs[0])];
 }
 
 function createJobs({ seeds, candidates, opponents, searchConfigs, gamesPerSide }) {
@@ -341,6 +339,7 @@ function tableColumns() {
     { header: "Games", value: (row) => row.metrics.games },
     { header: "Wins", value: (row) => row.metrics.wins },
     { header: "Win%", value: (row) => pct(row.metrics.winRate) },
+    { header: "EloΔ", value: (row) => formatNumber(row.metrics.approximateEloDelta, 0) },
     { header: "Margin", value: (row) => formatNumber(row.metrics.averageMargin, 1) },
     { header: "BidMake", value: (row) => pct(row.metrics.candidateBidMakeRate) },
     { header: "Illegal", value: (row) => row.metrics.illegalMoves },
@@ -354,8 +353,14 @@ function tableColumns() {
 }
 
 function printTournamentSummary(summary, { includeJson }) {
+  if (summary.seedGroup) {
+    console.log(
+      `Tournament seed group: ${summary.seedGroup.id} (${summary.seedGroup.role}${summary.seedGroup.locked ? ", locked" : ""})`,
+    );
+  }
   console.log(`Tournament seeds: ${summary.seeds.join(", ")}`);
   console.log(`Tournament opponents: ${summary.opponents.join(", ")}`);
+  console.log(`Search profile: ${summary.searchProfile} (fixed-work deterministic: ${summary.deterministicSearch ? "yes" : "no"})`);
   console.log(`Games per seed per orientation: ${summary.gamesPerSeed}`);
   console.log(`Workers: ${summary.workers}`);
   console.log(`Wall time: ${formatNumber(summary.elapsedMs / 1000, 1)}s`);
@@ -370,15 +375,24 @@ function printTournamentSummary(summary, { includeJson }) {
   }
 }
 
-function summarizeResults({ args, seeds, opponents, gamesPerSeed, workers, searchConfigs, results, startedAt }) {
+function summarizeResults({ args, seedGroup, seeds, opponents, gamesPerSeed, workers, searchConfigs, results, startedAt }) {
   const rows = results.map((result) => ({
     ...rowFromResult(result),
     total: result.total,
   }));
 
   return {
+    seedGroup: seedGroup
+      ? {
+          id: seedGroup.id,
+          role: seedGroup.role,
+          locked: seedGroup.locked,
+        }
+      : null,
     seeds,
     opponents,
+    searchProfile: "live",
+    deterministicSearch: true,
     gamesPerSeed,
     workers,
     searchConfigs: searchConfigs.map((config) => ({
@@ -390,6 +404,9 @@ function summarizeResults({ args, seeds, opponents, gamesPerSeed, workers, searc
       seed: config.seed,
       exactEndgameHandSize: config.exactEndgameHandSize,
       exactNodeLimit: config.exactNodeLimit,
+      rolloutMaxHandSize: config.rolloutMaxHandSize,
+      earlyStopLead: config.earlyStopLead,
+      sampleBudgetMode: config.sampleBudgetMode,
       evaluation: config.evaluation,
     })),
     rows: rows.map(({ total, ...row }) => row),
@@ -400,7 +417,8 @@ function summarizeResults({ args, seeds, opponents, gamesPerSeed, workers, searc
 }
 
 function createTournamentOptions(args) {
-  const seeds = parseSeeds(getArgValue(args, "seeds"), "20260618-20260620");
+  const seedGroup = resolveSeedGroup(getArgValue(args, "seed-group") ?? DEFAULT_TOURNAMENT_SEED_GROUP_ID);
+  const seeds = parseSeedSpec(getArgValue(args, "seeds"), seedGroup.seeds);
   const candidates = (getArgValue(args, "candidates") ?? `old-baseline,current,${CHALLENGER_ENGINE_ID}`)
     .split(",")
     .map((candidate) => candidate.trim())
@@ -411,11 +429,12 @@ function createTournamentOptions(args) {
   });
 
   const searchConfigs = parseSearchConfigs(args);
-  const gamesPerSeed = getArgNumber(args, "games", 10, 1);
+  const gamesPerSeed = getArgNumber(args, "games", seedGroup.defaultGamesPerSeed ?? 10, 1);
   const rawWorkers = getArgValue(args, "workers") ?? (hasFlag(args, "parallel") ? "auto" : "1");
 
   return {
     seeds,
+    seedGroup,
     candidates,
     opponents,
     searchConfigs,
@@ -504,6 +523,7 @@ async function runTournament(args, overrides = {}) {
 
   return summarizeResults({
     args,
+    seedGroup: options.seedGroup,
     seeds: options.seeds,
     opponents: options.opponents,
     gamesPerSeed: options.gamesPerSeed,
@@ -516,12 +536,21 @@ async function runTournament(args, overrides = {}) {
 
 async function runTuning(args) {
   const baseSearchConfig = parseSearchConfigs(args)[0];
-  const trainSeeds = parseSeeds(getArgValue(args, "train") ?? getArgValue(args, "tune-train"), "20260621-20260630");
-  const holdoutSeeds = parseSeeds(getArgValue(args, "holdout") ?? getArgValue(args, "tune-holdout"), "20260631-20260640");
-  const gamesPerSeed = getArgNumber(args, "games", 10, 1);
+  const trainGroup = resolveSeedGroup(getArgValue(args, "train-group") ?? DEFAULT_TRAINING_SEED_GROUP_ID);
+  const holdoutGroup = resolveSeedGroup(getArgValue(args, "holdout-group") ?? DEFAULT_HOLDOUT_SEED_GROUP_ID);
+  const trainSeeds = parseSeedSpec(getArgValue(args, "train") ?? getArgValue(args, "tune-train"), trainGroup.seeds);
+  const holdoutSeeds = parseSeedSpec(getArgValue(args, "holdout") ?? getArgValue(args, "tune-holdout"), holdoutGroup.seeds);
+  const gamesPerSeed = getArgNumber(args, "games", trainGroup.defaultGamesPerSeed ?? 10, 1);
   const rawWorkers = getArgValue(args, "workers") ?? "auto";
   const searchConfigs = createTuningSearchConfigs(args, baseSearchConfig);
 
+  if (holdoutGroup.role !== "public-validation" || !holdoutGroup.exposed) {
+    throw new Error(`Tuning validation group ${holdoutGroup.id} must be marked as exposed public validation data.`);
+  }
+  assertDisjointSeedSets(trainSeeds, holdoutSeeds, "training", "holdout");
+
+  console.log(`Training seed group: ${trainGroup.id}`);
+  console.log(`Public validation seed group: ${holdoutGroup.id}`);
   console.log("Training search configs:");
   searchConfigs.forEach((config) => {
     console.log(`- ${config.label}: ${config.timeLimitMs} ms, ${config.samples} samples`);
@@ -529,6 +558,7 @@ async function runTuning(args) {
 
   const trainSummary = await runTournament(args, {
     seeds: trainSeeds,
+    seedGroup: trainGroup,
     candidates: [CHALLENGER_ENGINE_ID],
     opponents: [CHAMPION_ENGINE_ID],
     searchConfigs,
@@ -551,6 +581,7 @@ async function runTuning(args) {
 
   const holdoutSummary = await runTournament(args, {
     seeds: holdoutSeeds,
+    seedGroup: holdoutGroup,
     candidates: ["old-baseline", "current", CHALLENGER_ENGINE_ID],
     opponents: [CHAMPION_ENGINE_ID],
     searchConfigs: holdoutConfigs,
@@ -598,11 +629,17 @@ async function runTuning(args) {
   return tuningSummary;
 }
 
-const args = process.argv.slice(2);
+function isMainModule() {
+  return process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+}
 
-if (hasFlag(args, "tune")) {
-  await runTuning(args);
-} else {
-  const summary = await runTournament(args);
-  printTournamentSummary(summary, { includeJson: !hasFlag(args, "no-json") });
+if (isMainModule()) {
+  const args = process.argv.slice(2);
+
+  if (hasFlag(args, "tune")) {
+    await runTuning(args);
+  } else {
+    const summary = await runTournament(args);
+    printTournamentSummary(summary, { includeJson: !hasFlag(args, "no-json") });
+  }
 }

@@ -8,7 +8,7 @@ import {
   getStrongAiResponseTimeoutMs,
   normalizeAiStrength,
 } from "../src/ai/liveSearch.js";
-import { buildDeck, sortHand } from "../src/game.js";
+import { buildDeck, createInitialGame, sortHand } from "../src/game.js";
 
 const deck = buildDeck();
 
@@ -84,6 +84,7 @@ assert.equal(
 );
 assert.equal(normalizeAiStrength("unknown"), AI_STRENGTH_FAST);
 assert.equal(normalizeAiStrength(AI_STRENGTH_STRONG), AI_STRENGTH_STRONG);
+assert.equal(createInitialGame().settings.aiStrength, AI_STRENGTH_STRONG, "new games default to the strongest bot");
 
 const originalWindow = globalThis.window;
 globalThis.window = {

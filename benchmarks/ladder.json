@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-08-11",
+  "currentChampion": "champion-2026-08-11",
+  "engines": [
+    {
+      "id": "old-baseline",
+      "status": "historical-baseline",
+      "module": "scripts/current-ai-baseline.mjs"
+    },
+    {
+      "id": "champion-2026-07-02",
+      "status": "previous-champion",
+      "module": "scripts/champions/strong-search-2026-07-02.mjs",
+      "sourceCommit": "5a0dbcd"
+    },
+    {
+      "id": "champion-2026-08-11",
+      "status": "current-champion",
+      "module": "scripts/champions/strong-search-2026-08-11.mjs",
+      "sourceFingerprint": "458c338795292fdd1c4c2537d5416a1252f22c5789b0508d47b5cbd90b9ea129",
+      "liveProfile": "live-challenger-v2"
+    }
+  ],
+  "matches": [
+    {
+      "candidate": "champion-2026-07-02",
+      "opponent": "old-baseline",
+      "suite": "historical-2026-07-02",
+      "games": 400,
+      "wins": 271,
+      "winRate": 0.6775,
+      "averageMargin": 172.5,
+      "approximateEloDelta": 129
+    },
+    {
+      "candidate": "champion-2026-08-11",
+      "opponent": "champion-2026-07-02",
+      "suite": "public-validation-2026-08",
+      "games": 200,
+      "wins": 178,
+      "winRate": 0.89,
+      "winRateLow95": 0.839,
+      "averageMargin": 470.6,
+      "approximateEloDelta": 363,
+      "illegalMoves": 0
+    },
+    {
+      "candidate": "champion-2026-08-11",
+      "opponent": "champion-2026-07-02",
+      "suite": "broad-promotion-2026-08-11",
+      "games": 800,
+      "wins": 720,
+      "winRate": 0.9,
+      "winRateLow95": 0.877,
+      "averageMargin": 476.2,
+      "approximateEloDelta": 382,
+      "illegalMoves": 0
+    },
+    {
+      "candidate": "champion-2026-08-11",
+      "opponent": "champion-2026-07-02",
+      "suite": "private-holdout-2026-08-11",
+      "artifact": "benchmarks/private-holdout-2026-08-11.json",
+      "games": 800,
+      "wins": 732,
+      "winRate": 0.915,
+      "winRateLow95": 0.8936360978487863,
+      "averageMargin": 499.96875,
+      "approximateEloDelta": 412.8008673408623,
+      "illegalMoves": 0,
+      "status": "PASS"
+    }
+  ]
+}

@@ -1,5 +1,5 @@
-import { chooseBotPlay } from "../ai.js";
-import { getLeadColor, isValidMove, teamForPlayer } from "../game.js";
+import { chooseBotPlay } from "./heuristics.js";
+import { getLeadColor, isValidMove, teamForPlayer } from "../../../src/game.js";
 import {
   evaluateRoundState,
   evaluateTerminalRound,

@@ -39,7 +39,7 @@ export function createInitialGame() {
     collectingWinner: null,
     pointsTaken: { us: 0, them: 0 },
     phase: "MENU",
-    settings: { mustWinByBid: false, aiStrength: "fast" },
+    settings: { mustWinByBid: false, aiStrength: "strong" },
     selectedCardIndex: -1,
     discardSelection: [],
     showKittyDisplay: false,

@@ -1,16 +1,18 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import * as champion from "./champions/strong-search-2026-07-02.mjs";
+import * as previousChampion from "./champions/strong-search-2026-07-02.mjs";
+import * as champion from "./champions/strong-search-2026-08-11.mjs";
 import * as baselineAi from "./current-ai-baseline.mjs";
 import { createBenchmarkFingerprint, simulateBenchmarkRange } from "./ai-benchmark-sim.mjs";
 import { CHAMPION_ENGINE_ID, createBenchmarkStrategies } from "./ai-engines.mjs";
 import { buildDeck, getLeadColor, isValidMove, sortHand } from "../src/game.js";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
-const championDir = fileURLToPath(new URL("./champions/strong-search-2026-07-02/", import.meta.url));
-const championEntry = fileURLToPath(new URL("./champions/strong-search-2026-07-02.mjs", import.meta.url));
+const championDir = fileURLToPath(new URL("./champions/strong-search-2026-08-11/", import.meta.url));
+const championEntry = fileURLToPath(new URL("./champions/strong-search-2026-08-11.mjs", import.meta.url));
 const deck = buildDeck();
 
 function card(color, rank) {
@@ -53,8 +55,26 @@ async function assertNoMovingAiImports() {
   }
 }
 
-assert.equal(champion.championMetadata.id, "champion-2026-07-02");
-assert.equal(champion.championMetadata.sourceCommit, "5a0dbcd");
+async function createSnapshotFingerprint() {
+  const files = (await listSnapshotFiles(championDir))
+    .filter((file) => file.endsWith(".js"))
+    .sort((left, right) => basename(left).localeCompare(basename(right)));
+  const hash = createHash("sha256");
+
+  for (const file of files) {
+    hash.update(basename(file));
+    hash.update("\0");
+    hash.update(await readFile(file));
+    hash.update("\0");
+  }
+
+  return hash.digest("hex");
+}
+
+assert.equal(previousChampion.championMetadata.id, "champion-2026-07-02", "the previous champion remains importable");
+assert.equal(champion.championMetadata.id, "champion-2026-08-11");
+assert.equal(champion.championMetadata.sourceCommit, null);
+assert.equal(champion.championMetadata.liveSearchConfig.label, "live-challenger-v2");
 assert.equal(champion.championMetadata.defaultSearchConfig.label, "default");
 assert.equal(typeof champion.chooseBotBid, "function");
 assert.equal(typeof champion.chooseBotKittyPlan, "function");
@@ -63,6 +83,11 @@ assert.equal(typeof champion.evaluateSampledPlayCandidates, "function");
 assert.equal(typeof champion.normalizeSearchConfig, "function");
 
 await assertNoMovingAiImports();
+assert.equal(
+  await createSnapshotFingerprint(),
+  champion.championMetadata.sourceFingerprint,
+  "current champion source fingerprint matches its frozen files",
+);
 
 const actingHand = sortHand([card("Red", 14), card("Red", 10), card("Black", 2), card("Yellow", 3)]);
 const searchGame = {

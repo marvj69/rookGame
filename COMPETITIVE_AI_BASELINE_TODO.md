@@ -1,94 +1,52 @@
-# Competitive AI Baseline TODO
+# Competitive AI Roadmap and Promotion Record
 
-Goal: freeze the current Strong/search AI as the first named champion baseline, then require every future AI change to beat that champion under deterministic, legal, and browser-safe conditions.
+The current champion is `champion-2026-08-11`, promoted from the shipped Strong bot after beating `champion-2026-07-02` on public, broad, and fresh private suites. The old July champion remains frozen and importable for historical comparisons.
 
-Baseline snapshot intent:
-- Snapshot commit: `5a0dbcd` (`Complete superhuman AI TODOs`).
-- Snapshot role: current champion, not an experimental candidate.
-- Future work should compare challenger AI against this snapshot competitively.
-- The moving implementation in `src/ai.js` must not be treated as the baseline after new AI work begins.
+## Completed foundation
 
-Current evidence from 2026-07-02:
-- `npm test` passed.
-- `npm run build` passed.
-- Fast/current AI beat the frozen old baseline 226/400 games, 56.5%, +78.6 average margin, 0 illegal moves.
-- Strong/search AI beat the frozen old baseline 271/400 games, 67.8%, +172.5 average margin, 0 illegal moves.
-- Three-seed Strong/search tournament beat the old baseline 89/120 games, 74.2%, +215.8 average margin, 77.2% bid make rate, 0 illegal moves.
-- Strong browser reliability passed 39/39 search completions with 0 fallbacks, 0 timeouts, and 0 illegal/stale/worker errors.
+- [x] Freeze named, self-contained AI snapshots instead of benchmarking against moving source.
+- [x] Support moving challenger, old heuristic baseline, previous champion, and current champion engines.
+- [x] Mirror every deal across both team orientations and emit deterministic fingerprints.
+- [x] Hide opponent hands and kitty contents from live and benchmark search.
+- [x] Reject any benchmark containing an illegal bid, discard, or play.
+- [x] Compare every legal play on the same sampled hidden deal; discard partial samples that could favor card order.
+- [x] Benchmark the engine-specific shipped `live` profile rather than silently applying one shared search config.
+- [x] Require fixed-work deterministic evidence, minimum sample sizes, Wilson confidence bounds, positive margin, and defensible contract results.
+- [x] Separate tuning seeds from exposed public regression seeds.
+- [x] Require a fresh, untracked private seed file for promotion; checked-in seeds cannot satisfy the promotion gate.
+- [x] Record approximate Elo, bidder/defender results, and early/middle/endgame trick performance.
+- [x] Add exact endgame oracle fixtures for making a bid, setting a bidder, and a contract-swing trump decision.
+- [x] Validate production browser search in normal, 4x-throttled, and forced-timeout modes.
+- [x] Add CI for dependency audit, deterministic tests, champion parity smoke, production build, browser worker completion, and fallback recovery.
 
-## Phase 1 - Freeze the Champion Snapshot
+## 2026-08-11 promotion
 
-- [x] Copy the current AI implementation into a named champion module, for example `scripts/champions/strong-search-2026-07-02.mjs`.
-- [x] Include every dependency needed for deterministic champion behavior: heuristics, search config, evaluation weights, and any helper logic that could drift later.
-- [x] Add a small metadata export with champion name, source commit, date, default search config, and validation commands.
-- [x] Make the champion importable by benchmark and tournament scripts without relying on the moving `src/ai.js` implementation.
-- [x] Acceptance: changing `src/ai.js` after the snapshot does not change champion benchmark behavior.
+- [x] Public validation: 178/200 wins (89.0%), +470.6 average margin, 0 illegal moves.
+- [x] Broad promotion suite: 720/800 wins (90.0%), +476.2 average margin, 87.7% Wilson lower bound, 0 illegal moves.
+- [x] Fresh private holdout: 732/800 wins (91.5%), +500.0 average margin, 89.4% Wilson lower bound, 0 illegal moves.
+- [x] Private seed commitment: `fb5ff0acb3803fcb7dbc2c0a6e5250bbdc1f64f3b1385925c92cf6d33049c5f7`.
+- [x] Freeze the validated implementation as `scripts/champions/strong-search-2026-08-11.mjs`.
+- [x] Make the promoted snapshot the default opponent for future advancement gates.
 
-## Phase 2 - Upgrade Benchmark Scripts to Support Champion Play
+## Still needed for a human-superhuman claim
 
-- [x] Add benchmark flags such as `--opponent=champion-2026-07-02` and `--candidate=challenger`.
-- [x] Keep the old baseline available, but make the champion snapshot the default competitive opponent for future AI work.
-- [x] Print both old-baseline and champion-baseline summaries when requested.
-- [x] Add deterministic fingerprint output for champion-vs-champion runs.
-- [x] Acceptance: champion vs itself produces a stable 50/50 mirrored result fingerprint for fixed seeds.
+- [ ] Obtain labels or ranked decisions from demonstrably strong human Rook players for bidding, trump, kitty, and play scenarios.
+- [ ] Collect complete strong-human games under the exact rules implemented here and evaluate the frozen champion against them.
+- [ ] Expand the oracle pack with adversarial multi-trick cases and independently review their rule assumptions.
+- [ ] Repeat browser reliability on representative low-end physical phones if mobile latency becomes a release criterion.
 
-## Phase 3 - Define Advancement Gates
+The repository now proves that the August bot is substantially stronger than the best prior bot in this project. It does not yet prove superiority over elite human Rook players.
 
-- [x] Require 0 illegal bids, discards, and plays in every run.
-- [x] Require no hidden-card access in live play or benchmark search.
-- [x] Require challenger to beat champion by at least 55% over a standard holdout suite before considering it an improvement.
-- [x] Require challenger to beat champion by at least 60% over a larger full suite before replacing the champion.
-- [x] Require average margin and bid make rate to improve or remain defensible; do not accept a higher win rate caused by reckless bidding variance alone.
-- [x] Require `npm test`, `npm run build`, quick benchmark, full benchmark, tournament, and browser Strong-mode reliability before promoting a new champion.
-
-## Phase 4 - Build a Holdout Seed Protocol
-
-- [ ] Create training seeds for tuning.
-- [ ] Create locked holdout seeds that are never used for tuning.
-- [ ] Store seed groups in a checked-in config file so future agents cannot accidentally cherry-pick a lucky seed.
-- [ ] Run champion replacement only on holdout seeds.
-- [ ] Add a benchmark command that prints whether the challenger passes, fails, or needs more games for confidence.
-- [ ] Acceptance: the same challenger produces the same pass/fail result for fixed holdout seeds and config.
-
-## Phase 5 - Add Elo-Style Competitive Tracking
-
-- [ ] Add a tournament ladder file listing old baseline, current champion, and candidate engines.
-- [ ] Compute approximate Elo deltas from mirrored match results.
-- [ ] Store tournament result JSON for promoted champions.
-- [ ] Track performance by category: bidding, kitty/trump, early trick play, midgame, endgame, bid defense, and bid protection.
-- [ ] Acceptance: a future agent can see whether a candidate is broadly better or only exploiting one benchmark weakness.
-
-## Phase 6 - Improve Toward Actual Superhuman Evidence
-
-- [ ] Create expert scenario packs for hard bidding, trump choice, kitty discard, and trick-play decisions.
-- [ ] Add labeled expected choices or ranked choice rubrics for those scenarios.
-- [ ] Add adversarial scenarios where naive point chasing loses the bid or fails to set opponents.
-- [ ] Add double-dummy/endgame fixtures where exact optimal play is known.
-- [ ] If possible, collect games or decisions from strong human players and score the champion against those.
-- [ ] Acceptance: champion strength is supported by old-baseline wins, champion-ladder wins, tactical fixtures, and human/expert decision evidence.
-
-## Phase 7 - Promotion Rules for the Next Champion
-
-- [ ] A challenger can become champion only if it beats the current champion on locked holdout seeds.
-- [ ] Promotion must create a new named snapshot module instead of editing the previous champion.
-- [ ] Promotion must record source commit, benchmark commands, results, browser reliability summary, and known weaknesses.
-- [ ] Keep at least the last three champions available for regression tournaments.
-- [ ] Acceptance: future AI work always has a stable, historically comparable opponent.
-
-## Immediate Next Command Set
-
-After the champion module exists, the expected validation flow should look like:
+## Future challenger flow
 
 ```sh
 npm test
 npm run build
-npm run ai:benchmark -- --mode=quick --candidate=challenger --opponent=champion-2026-07-02 --parallel --seed=20260702
-npm run ai:benchmark -- --mode=standard --candidate=challenger --opponent=champion-2026-07-02 --gate=consideration --parallel --seed=20260702
-npm run ai:benchmark:acceptance -- --candidate=challenger --opponent=champion-2026-07-02 --gate=promotion --workers=auto
-npm run ai:tournament -- --seeds=<locked-holdout-seeds> --games=<holdout-games> --candidates=champion-2026-07-02,challenger --opponent=champion-2026-07-02 --workers=auto --no-json
-npm run ai:browser-reliability -- --games=1 --hands=1 --no-json
+npm run ai:benchmark -- --mode=quick --profile=live --candidate=challenger --opponent=champion-2026-08-11 --parallel --seed=20260811
+npm run ai:benchmark -- --mode=standard --profile=live --candidate=challenger --opponent=champion-2026-08-11 --gate=consideration --parallel --seed=20260811
+npm run ai:benchmark:acceptance -- --profile=live --candidate=challenger --opponent=champion-2026-08-11 --gate=promotion --workers=auto
+ROOK_PRIVATE_HOLDOUT_FILE=/absolute/path/to/new-private-seeds.txt npm run ai:holdout -- --candidate=challenger --opponent=champion-2026-08-11 --gate=promotion --workers=auto --strict --output=benchmarks/private-holdout-YYYY-MM-DD.json
+npm run test:browser
 ```
 
-## Working Definition
-
-This snapshot should become the first serious competitive champion. That does not prove it is superhuman. It gives the project a stable opponent strong enough that future AI improvements must win real games, legally, repeatedly, and without benchmark drift.
+Do not tune on a private holdout after seeing its result. If a candidate fails, return to the declared training/public data and generate an entirely new private set only after the next candidate is frozen.

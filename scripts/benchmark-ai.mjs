@@ -106,6 +106,8 @@ export async function runBenchmark(options = parseBenchmarkArgs()) {
         mode: options.mode,
         candidateEngineId: candidateEngine.id,
         opponentEngineId: opponentEngine.id,
+        searchProfile: options.searchProfile,
+        deterministicSearch: options.deterministicSearch,
       })
     : null;
 
@@ -154,6 +156,8 @@ if (isMainModule()) {
         elapsedMs,
         workerCount,
         search: options.search,
+        searchProfile: options.searchProfile,
+        deterministicSearch: options.deterministicSearch,
       }).join("\n"),
     );
 

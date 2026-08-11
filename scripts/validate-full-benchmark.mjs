@@ -1,6 +1,7 @@
 import { createBenchmarkFingerprint, BENCHMARK_MODE_DEFAULT_GAMES, parseBenchmarkArgs } from "./ai-benchmark-sim.mjs";
 import { formatAdvancementGateReport } from "./ai-advancement-gates.mjs";
 import { runBenchmark } from "./benchmark-ai.mjs";
+import { DEFAULT_BENCHMARK_SEED } from "./ai-seed-groups.mjs";
 
 function getArgValue(args, name) {
   const match = args.find((arg) => arg.startsWith(`--${name}=`));
@@ -20,13 +21,25 @@ function formatSeconds(ms) {
 }
 
 function createFullBenchmarkOptions(args) {
-  const seed = getArgNumber(args, "seed", 20260618);
+  const seed = getArgNumber(args, "seed", DEFAULT_BENCHMARK_SEED);
   const games = getArgNumber(args, "games", BENCHMARK_MODE_DEFAULT_GAMES.full);
   const rawWorkers = getArgValue(args, "workers");
   const candidate = getArgValue(args, "candidate");
   const opponent = getArgValue(args, "opponent");
   const gate = getArgValue(args, "gate");
   const benchmarkArgs = ["--full", `--seed=${seed}`, `--games=${games}`];
+  const forwardedArgs = [
+    "profile",
+    "search-ms",
+    "search-samples",
+    "search-seed",
+    "search-min-samples",
+    "search-sample-attempts",
+    "search-endgame",
+    "search-node-limit",
+    "search-rollout-max-hand",
+    "search-early-stop",
+  ];
 
   if (rawWorkers) {
     benchmarkArgs.push(`--workers=${rawWorkers}`);
@@ -40,6 +53,10 @@ function createFullBenchmarkOptions(args) {
   if (gate) {
     benchmarkArgs.push(`--gate=${gate}`);
   }
+  forwardedArgs.forEach((name) => {
+    const value = getArgValue(args, name);
+    if (value !== null) benchmarkArgs.push(`--${name}=${value}`);
+  });
 
   return parseBenchmarkArgs(benchmarkArgs);
 }

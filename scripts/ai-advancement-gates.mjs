@@ -1,16 +1,25 @@
+import { CHALLENGER_ENGINE_ID, CHAMPION_ENGINE_ID } from "./ai-engines.mjs";
+import { DEFAULT_HOLDOUT_BENCHMARK_SEED } from "./ai-seed-groups.mjs";
+import { wilsonScoreInterval } from "./ai-statistics.mjs";
+
 export const ADVANCEMENT_GATE_IDS = Object.freeze({
   CONSIDERATION: "consideration",
   PROMOTION: "promotion",
 });
 
+const QUICK_CHAMPION_BENCHMARK_COMMAND = `npm run ai:benchmark -- --mode=quick --profile=live --candidate=${CHALLENGER_ENGINE_ID} --opponent=${CHAMPION_ENGINE_ID} --parallel --seed=${DEFAULT_HOLDOUT_BENCHMARK_SEED}`;
+const STANDARD_CONSIDERATION_COMMAND = `npm run ai:benchmark -- --mode=standard --profile=live --candidate=${CHALLENGER_ENGINE_ID} --opponent=${CHAMPION_ENGINE_ID} --gate=consideration --parallel --seed=${DEFAULT_HOLDOUT_BENCHMARK_SEED}`;
+const FULL_PROMOTION_BENCHMARK_COMMAND = `npm run ai:benchmark:acceptance -- --profile=live --candidate=${CHALLENGER_ENGINE_ID} --opponent=${CHAMPION_ENGINE_ID} --gate=promotion --workers=auto --seed=${DEFAULT_HOLDOUT_BENCHMARK_SEED}`;
+const PRIVATE_HOLDOUT_PROMOTION_COMMAND = `ROOK_PRIVATE_HOLDOUT_FILE=/absolute/path/to/fresh-seeds.txt npm run ai:holdout -- --candidate=${CHALLENGER_ENGINE_ID} --opponent=${CHAMPION_ENGINE_ID} --gate=promotion --workers=auto --strict`;
+
 export const PROMOTION_VALIDATION_COMMANDS = Object.freeze([
   "npm test",
   "npm run build",
-  "npm run ai:benchmark -- --mode=quick --candidate=challenger --opponent=champion-2026-07-02 --parallel --seed=20260702",
-  "npm run ai:benchmark -- --mode=standard --candidate=challenger --opponent=champion-2026-07-02 --gate=consideration --parallel --seed=20260702",
-  "npm run ai:benchmark:acceptance -- --candidate=challenger --opponent=champion-2026-07-02 --gate=promotion --workers=auto",
-  "npm run ai:tournament -- --seeds=20260618-20260620 --games=20 --candidates=champion-2026-07-02,challenger --opponent=champion-2026-07-02 --workers=auto --no-json",
-  "npm run ai:browser-reliability -- --games=1 --hands=1 --no-json",
+  QUICK_CHAMPION_BENCHMARK_COMMAND,
+  STANDARD_CONSIDERATION_COMMAND,
+  FULL_PROMOTION_BENCHMARK_COMMAND,
+  PRIVATE_HOLDOUT_PROMOTION_COMMAND,
+  "npm run test:browser",
 ]);
 
 export const ADVANCEMENT_GATES = Object.freeze({
@@ -18,24 +27,32 @@ export const ADVANCEMENT_GATES = Object.freeze({
     id: ADVANCEMENT_GATE_IDS.CONSIDERATION,
     label: "Standard improvement consideration",
     requiredBenchmarkMode: "standard",
-    requiredCandidate: "challenger",
-    requiredOpponent: "champion-2026-07-02",
+    requiredCandidate: CHALLENGER_ENGINE_ID,
+    requiredOpponent: CHAMPION_ENGINE_ID,
+    requiredSearchProfile: "live",
+    requiredDeterministicSearch: true,
+    minGames: 200,
     minWinRate: 0.55,
+    minWinRateLowerBound: 0.5,
     minAverageMargin: 0,
     maxBidMakeRateDrop: 0.05,
     minDefensibleBidMakeRate: 0.5,
     requiredCommands: Object.freeze([
       "npm test",
-      "npm run ai:benchmark -- --mode=standard --candidate=challenger --opponent=champion-2026-07-02 --gate=consideration --parallel --seed=20260702",
+      STANDARD_CONSIDERATION_COMMAND,
     ]),
   }),
   [ADVANCEMENT_GATE_IDS.PROMOTION]: Object.freeze({
     id: ADVANCEMENT_GATE_IDS.PROMOTION,
     label: "Champion promotion",
     requiredBenchmarkMode: "full",
-    requiredCandidate: "challenger",
-    requiredOpponent: "champion-2026-07-02",
-    minWinRate: 0.6,
+    requiredCandidate: CHALLENGER_ENGINE_ID,
+    requiredOpponent: CHAMPION_ENGINE_ID,
+    requiredSearchProfile: "live",
+    requiredDeterministicSearch: true,
+    minGames: 800,
+    minWinRate: 0.58,
+    minWinRateLowerBound: 0.54,
     minAverageMargin: 0,
     maxBidMakeRateDrop: 0.03,
     minDefensibleBidMakeRate: 0.55,
@@ -83,7 +100,15 @@ export function parseAdvancementGate(rawValue) {
   return gate;
 }
 
-export function evaluateAdvancementGate({ metrics, gate, mode, candidateEngineId, opponentEngineId }) {
+export function evaluateAdvancementGate({
+  metrics,
+  gate,
+  mode,
+  candidateEngineId,
+  opponentEngineId,
+  searchProfile,
+  deterministicSearch,
+}) {
   const resolvedGate = typeof gate === "string" ? parseAdvancementGate(gate) : gate;
   if (!resolvedGate) return null;
 
@@ -96,6 +121,7 @@ export function evaluateAdvancementGate({ metrics, gate, mode, candidateEngineId
     metrics.candidateBidMakeRate >= metrics.baselineBidMakeRate ||
     (bidMakeRateDrop <= resolvedGate.maxBidMakeRateDrop &&
       metrics.candidateBidMakeRate >= resolvedGate.minDefensibleBidMakeRate);
+  const winRateInterval = wilsonScoreInterval(metrics.wins, metrics.games);
 
   const checks = [
     check(
@@ -111,6 +137,24 @@ export function evaluateAdvancementGate({ metrics, gate, mode, candidateEngineId
       `${mode}; required ${resolvedGate.requiredBenchmarkMode}`,
     ),
     check(
+      "search-profile",
+      "Shipped search profile",
+      searchProfile === resolvedGate.requiredSearchProfile,
+      `${searchProfile ?? "unspecified"}; required ${resolvedGate.requiredSearchProfile}`,
+    ),
+    check(
+      "deterministic-search",
+      "Fixed-work strength sampling",
+      deterministicSearch === resolvedGate.requiredDeterministicSearch,
+      `${deterministicSearch ? "enabled" : "disabled"}; required enabled`,
+    ),
+    check(
+      "sample-size",
+      "Game count",
+      metrics.games >= resolvedGate.minGames,
+      `${metrics.games} games; required at least ${resolvedGate.minGames}`,
+    ),
+    check(
       "legality",
       "Legal decisions",
       totalIllegalMoves === 0 && illegalBids === 0 && illegalDiscards === 0 && illegalPlays === 0,
@@ -121,6 +165,14 @@ export function evaluateAdvancementGate({ metrics, gate, mode, candidateEngineId
       "Win rate",
       metrics.winRate >= resolvedGate.minWinRate,
       `${pct(metrics.winRate)}; required at least ${pct(resolvedGate.minWinRate)}`,
+    ),
+    check(
+      "win-rate-confidence",
+      "95% win-rate lower bound",
+      winRateInterval.low >= resolvedGate.minWinRateLowerBound,
+      `${pct(winRateInterval.low)}-${pct(winRateInterval.high)}; lower bound must be at least ${pct(
+        resolvedGate.minWinRateLowerBound,
+      )}`,
     ),
     check(
       "average-margin",

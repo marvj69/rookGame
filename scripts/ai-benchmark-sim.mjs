@@ -10,7 +10,7 @@ import {
   sortHand,
   teamForPlayer,
 } from "../src/game.js";
-import { DEFAULT_SEARCH_CONFIG, normalizeSearchConfig } from "../src/ai/config.js";
+import { DEFAULT_SEARCH_CONFIG, LIVE_SEARCH_CONFIG, normalizeSearchConfig } from "../src/ai/config.js";
 import {
   CHALLENGER_ENGINE_ID,
   CHAMPION_ENGINE_ID,
@@ -18,6 +18,8 @@ import {
   expandOpponentEngineIds,
   resolveEngineId,
 } from "./ai-engines.mjs";
+import { DEFAULT_BENCHMARK_SEED } from "./ai-seed-groups.mjs";
+import { eloDeltaFromScore, wilsonScoreInterval } from "./ai-statistics.mjs";
 
 const TARGET_SCORE = 500;
 const MAX_BID = 150;
@@ -27,6 +29,7 @@ export const BENCHMARK_MODE_DEFAULT_GAMES = {
   standard: 200,
   full: 1000,
 };
+const SEARCH_PROFILES = new Set(["benchmark", "live"]);
 
 function getArgValue(args, name) {
   const match = args.find((arg) => arg.startsWith(`--${name}=`));
@@ -45,8 +48,21 @@ function getArgNumber(args, name, fallback, min = 1) {
   return Number.isFinite(value) && value >= min ? value : fallback;
 }
 
+function getOptionalSearchNumber(args, name, { min = 0, allowInfinity = false, allowNull = false } = {}) {
+  const rawValue = getArgValue(args, name);
+  if (rawValue === null) return undefined;
+
+  const normalized = String(rawValue).trim().toLowerCase();
+  if (allowInfinity && ["infinity", "inf", "unlimited"].includes(normalized)) return Number.POSITIVE_INFINITY;
+  if (allowNull && ["null", "none", "off"].includes(normalized)) return null;
+
+  const value = Number(rawValue);
+  return Number.isFinite(value) && value >= min ? value : undefined;
+}
+
 export function parseBenchmarkArgs(args = process.argv.slice(2)) {
   const mode = getArgValue(args, "mode") ?? (hasFlag(args, "quick") ? "quick" : hasFlag(args, "full") ? "full" : "standard");
+  const searchProfile = (getArgValue(args, "profile") ?? "benchmark").trim().toLowerCase();
   const candidateSpec = getArgValue(args, "candidate") ?? (hasFlag(args, "play-search") ? CHALLENGER_ENGINE_ID : CURRENT_ENGINE_ID);
   const candidateEngineId = resolveEngineId(candidateSpec);
   const opponentEngineIds = expandOpponentEngineIds(getArgValue(args, "opponent"), {
@@ -56,9 +72,30 @@ export function parseBenchmarkArgs(args = process.argv.slice(2)) {
   if (!Object.hasOwn(BENCHMARK_MODE_DEFAULT_GAMES, mode)) {
     throw new Error(`Unsupported benchmark mode "${mode}". Use "quick", "standard", or "full".`);
   }
+  if (!SEARCH_PROFILES.has(searchProfile)) {
+    throw new Error(`Unsupported search profile "${searchProfile}". Use "benchmark" or "live".`);
+  }
 
   const requestedGamesPerSide = getArgNumber(args, "games", null);
   const requestedWorkers = getArgNumber(args, "workers", null);
+  const profileSearchConfig = searchProfile === "live" ? LIVE_SEARCH_CONFIG : DEFAULT_SEARCH_CONFIG;
+  const searchOverrides = {};
+  const overrideSpecs = [
+    ["search-ms", "timeLimitMs", { min: 0 }],
+    ["search-samples", "samples", { min: 1 }],
+    ["search-seed", "seed", { min: 1 }],
+    ["search-min-samples", "minSamples", { min: 0 }],
+    ["search-sample-attempts", "maxSampleAttempts", { min: 1 }],
+    ["search-endgame", "exactEndgameHandSize", { min: 0 }],
+    ["search-node-limit", "exactNodeLimit", { min: 1 }],
+    ["search-rollout-max-hand", "rolloutMaxHandSize", { min: 0, allowInfinity: true }],
+    ["search-early-stop", "earlyStopLead", { min: 0, allowNull: true }],
+  ];
+
+  overrideSpecs.forEach(([argName, configKey, parseOptions]) => {
+    const value = getOptionalSearchNumber(args, argName, parseOptions);
+    if (value !== undefined) searchOverrides[configKey] = value;
+  });
 
   return {
     mode,
@@ -68,17 +105,14 @@ export function parseBenchmarkArgs(args = process.argv.slice(2)) {
     opponentEngineId: opponentEngineIds[0] ?? CHAMPION_ENGINE_ID,
     opponentEngineIds,
     gamesPerSide: requestedGamesPerSide ?? BENCHMARK_MODE_DEFAULT_GAMES[mode],
-    seed: getArgNumber(args, "seed", 20260618),
+    seed: getArgNumber(args, "seed", DEFAULT_BENCHMARK_SEED),
     workerCount: requestedWorkers ?? (hasFlag(args, "parallel") || mode === "full" ? "auto" : 1),
+    searchProfile,
+    deterministicSearch: searchProfile === "live" && !hasFlag(args, "wall-clock-search"),
+    searchOverrides,
     search: normalizeSearchConfig({
-      ...DEFAULT_SEARCH_CONFIG,
-      timeLimitMs: getArgNumber(args, "search-ms", DEFAULT_SEARCH_CONFIG.timeLimitMs, 0),
-      samples: getArgNumber(args, "search-samples", DEFAULT_SEARCH_CONFIG.samples),
-      seed: getArgNumber(args, "search-seed", DEFAULT_SEARCH_CONFIG.seed),
-      minSamples: getArgNumber(args, "search-min-samples", DEFAULT_SEARCH_CONFIG.minSamples, 0),
-      maxSampleAttempts: getArgNumber(args, "search-sample-attempts", DEFAULT_SEARCH_CONFIG.maxSampleAttempts),
-      exactEndgameHandSize: getArgNumber(args, "search-endgame", DEFAULT_SEARCH_CONFIG.exactEndgameHandSize, 0),
-      exactNodeLimit: getArgNumber(args, "search-node-limit", DEFAULT_SEARCH_CONFIG.exactNodeLimit),
+      ...profileSearchConfig,
+      ...searchOverrides,
     }),
   };
 }
@@ -144,6 +178,21 @@ function getEngine(playerId, candidateTeam, strategies) {
 }
 
 function createStats() {
+  const createRolePerformance = () => ({
+    bidRounds: 0,
+    madeBids: 0,
+    failedBids: 0,
+    defenseRounds: 0,
+    sets: 0,
+    scoreAsBidder: 0,
+    scoreAsDefender: 0,
+  });
+  const createTrickPerformance = () => ({
+    early: { won: 0, points: 0 },
+    middle: { won: 0, points: 0 },
+    endgame: { won: 0, points: 0 },
+  });
+
   return {
     rounds: 0,
     bids: { candidate: 0, baseline: 0 },
@@ -155,6 +204,14 @@ function createStats() {
     decisionRuntimeMs: { candidate: 0, baseline: 0 },
     decisionKinds: { bid: 0, kitty: 0, play: 0 },
     decisionKindRuntimeMs: { bid: 0, kitty: 0, play: 0 },
+    rolePerformance: {
+      candidate: createRolePerformance(),
+      baseline: createRolePerformance(),
+    },
+    trickPerformance: {
+      candidate: createTrickPerformance(),
+      baseline: createTrickPerformance(),
+    },
     search: {
       decisions: 0,
       fallbacks: 0,
@@ -216,6 +273,37 @@ function shouldUseSearchForPlay(engine) {
   return Boolean(engine?.usesSearch && typeof engine.evaluateSearch === "function");
 }
 
+function getEngineSearchConfig(engine, options, strategyLabel) {
+  const engineSpecificConfig = options.engineSearchConfigs?.[strategyLabel];
+  if (engineSpecificConfig) {
+    const normalized = normalizeSearchConfig(engineSpecificConfig);
+    return options.deterministicSearch
+      ? normalizeSearchConfig({ ...normalized, timeLimitMs: Math.max(normalized.timeLimitMs, 5000) })
+      : normalized;
+  }
+
+  if (!options.searchProfile) return normalizeSearchConfig(options.search);
+
+  const profileConfig =
+    options.searchProfile === "live"
+      ? engine.liveSearchConfig ?? options.search
+      : engine.defaultSearchConfig ?? options.search;
+  const overrides = options.searchOverrides ?? {};
+
+  const normalized = normalizeSearchConfig({
+    ...profileConfig,
+    ...overrides,
+    evaluation: {
+      ...profileConfig.evaluation,
+      ...(overrides.evaluation ?? {}),
+    },
+  });
+
+  return options.deterministicSearch
+    ? normalizeSearchConfig({ ...normalized, timeLimitMs: Math.max(normalized.timeLimitMs, 5000) })
+    : normalized;
+}
+
 function choosePlayCard(state, playerId, candidateTeam, stats, strategies, options) {
   const label = strategyLabelForPlayer(playerId, candidateTeam);
   const engine = getEngine(playerId, candidateTeam, strategies);
@@ -225,6 +313,8 @@ function choosePlayCard(state, playerId, candidateTeam, stats, strategies, optio
     return strategy.chooseBotPlay(state, playerId);
   }
 
+  const searchConfig = getEngineSearchConfig(engine, options, label);
+
   const searchSeed =
     state.searchContext.baseSeed +
     state.searchContext.decisionIndex * 1009 +
@@ -233,14 +323,8 @@ function choosePlayCard(state, playerId, candidateTeam, stats, strategies, optio
     state.currentTrick.length * 31;
   state.searchContext.decisionIndex += 1;
   const result = engine.evaluateSearch(createPublicSearchView(state, playerId), playerId, {
+    ...searchConfig,
     seed: searchSeed,
-    samples: options.search.samples,
-    minSamples: options.search.minSamples,
-    timeLimitMs: options.search.timeLimitMs,
-    maxSampleAttempts: options.search.maxSampleAttempts,
-    exactEndgameHandSize: options.search.exactEndgameHandSize,
-    exactNodeLimit: options.search.exactNodeLimit,
-    evaluation: options.search.evaluation,
     policy: strategy.chooseBotPlay,
     fallbackCard: strategy.chooseBotPlay(state, playerId),
   });
@@ -253,7 +337,7 @@ function choosePlayCard(state, playerId, candidateTeam, stats, strategies, optio
     stats.search.fallbacks += 1;
   }
 
-  if (result.elapsedMs >= options.search.timeLimitMs && result.samplesUsed < options.search.samples) {
+  if (result.elapsedMs >= searchConfig.timeLimitMs && result.samplesUsed < searchConfig.samples) {
     stats.search.timeouts += 1;
   }
 
@@ -399,7 +483,7 @@ function playCard(state, playerId, candidateTeam, stats, strategies, options) {
   advanceTurn(state);
 }
 
-function resolveTrick(state) {
+function resolveTrick(state, candidateTeam, stats) {
   const leadColor = getLeadColor(state.currentTrick, state.trump);
   let bestIndex = 0;
   let bestPower = getCardPower(state.currentTrick[0].card, state.trump, leadColor);
@@ -418,7 +502,13 @@ function resolveTrick(state) {
   });
 
   const winner = state.currentTrick[bestIndex].pid;
-  state.pointsTaken[teamForPlayer(winner)] += points;
+  const winningTeam = teamForPlayer(winner);
+  const winningLabel = winningTeam === candidateTeam ? "candidate" : "baseline";
+  const trickIndex = state.tricks.length;
+  const stage = trickIndex < 4 ? "early" : trickIndex < 9 ? "middle" : "endgame";
+  state.pointsTaken[winningTeam] += points;
+  stats.trickPerformance[winningLabel][stage].won += 1;
+  stats.trickPerformance[winningLabel][stage].points += points;
   state.tricks.push(state.currentTrick.map((play) => ({ ...play })));
   state.currentTrick = [];
   state.currentTurn = winner;
@@ -433,7 +523,7 @@ function playRound(state, candidateTeam, stats, strategies, options) {
       playCard(state, state.currentTurn, candidateTeam, stats, strategies, options);
     }
 
-    resolveTrick(state);
+    resolveTrick(state, candidateTeam, stats);
   }
 
   const roundScore = completeRoundScore(state);
@@ -442,11 +532,20 @@ function playRound(state, candidateTeam, stats, strategies, options) {
   state.scores.them += roundScore.scoreChange.them;
 
   const bidLabel = strategyLabelForPlayer(roundScore.bidTeam === "us" ? 0 : 1, candidateTeam);
+  const defenseLabel = bidLabel === "candidate" ? "baseline" : "candidate";
+  const defenseTeam = roundScore.bidTeam === "us" ? "them" : "us";
   const bidMade = roundScore.scoreChange[roundScore.bidTeam] >= 0;
+  stats.rolePerformance[bidLabel].bidRounds += 1;
+  stats.rolePerformance[defenseLabel].defenseRounds += 1;
+  stats.rolePerformance[bidLabel].scoreAsBidder += roundScore.scoreChange[roundScore.bidTeam];
+  stats.rolePerformance[defenseLabel].scoreAsDefender += roundScore.scoreChange[defenseTeam];
   if (bidMade) {
     stats.madeBids[bidLabel] += 1;
+    stats.rolePerformance[bidLabel].madeBids += 1;
   } else {
     stats.failedBids[bidLabel] += 1;
+    stats.rolePerformance[bidLabel].failedBids += 1;
+    stats.rolePerformance[defenseLabel].sets += 1;
   }
 
   stats.rounds += 1;
@@ -505,6 +604,15 @@ function mergeStats(total, next) {
   total.decisionKindRuntimeMs.bid += next.decisionKindRuntimeMs.bid;
   total.decisionKindRuntimeMs.kitty += next.decisionKindRuntimeMs.kitty;
   total.decisionKindRuntimeMs.play += next.decisionKindRuntimeMs.play;
+  for (const label of ["candidate", "baseline"]) {
+    for (const key of ["bidRounds", "madeBids", "failedBids", "defenseRounds", "sets", "scoreAsBidder", "scoreAsDefender"]) {
+      total.rolePerformance[label][key] += next.rolePerformance[label][key];
+    }
+    for (const stage of ["early", "middle", "endgame"]) {
+      total.trickPerformance[label][stage].won += next.trickPerformance[label][stage].won;
+      total.trickPerformance[label][stage].points += next.trickPerformance[label][stage].points;
+    }
+  }
   total.search.decisions += next.search.decisions;
   total.search.fallbacks += next.search.fallbacks;
   total.search.samples += next.search.samples;
@@ -546,11 +654,16 @@ export function getBenchmarkMetrics(total, elapsedMs = 0) {
     total.stats.search.decisions > 0 ? total.stats.search.samples / total.stats.search.decisions : 0;
   const averageSearchMsPerDecision =
     total.stats.search.decisions > 0 ? total.stats.search.runtimeMs / total.stats.search.decisions : 0;
+  const winRate = total.games > 0 ? total.wins / total.games : 0;
+  const winRateInterval = wilsonScoreInterval(total.wins, total.games);
 
   return {
     games: total.games,
     wins: total.wins,
-    winRate: total.games > 0 ? total.wins / total.games : 0,
+    winRate,
+    winRateLow95: winRateInterval.low,
+    winRateHigh95: winRateInterval.high,
+    approximateEloDelta: total.games > 0 ? eloDeltaFromScore(winRate) : 0,
     averageMargin: total.games > 0 ? total.margin / total.games : 0,
     rounds: total.stats.rounds,
     candidateRoundScoreAverage: total.stats.rounds > 0 ? total.stats.roundScore.candidate / total.stats.rounds : 0,
@@ -566,6 +679,8 @@ export function getBenchmarkMetrics(total, elapsedMs = 0) {
     illegalMoves: total.stats.illegalMoves,
     decisionKinds: { ...total.stats.decisionKinds },
     decisionKindRuntimeMs: { ...total.stats.decisionKindRuntimeMs },
+    rolePerformance: structuredClone(total.stats.rolePerformance),
+    trickPerformance: structuredClone(total.stats.trickPerformance),
     searchDecisions: total.stats.search.decisions,
     searchFallbacks: total.stats.search.fallbacks,
     searchFallbackRate: total.stats.search.decisions > 0 ? total.stats.search.fallbacks / total.stats.search.decisions : 0,
@@ -597,6 +712,8 @@ export function createBenchmarkFingerprint(total) {
     roundScore: { ...total.stats.roundScore },
     decisions: { ...total.stats.decisions },
     decisionKinds: { ...total.stats.decisionKinds },
+    rolePerformance: structuredClone(total.stats.rolePerformance),
+    trickPerformance: structuredClone(total.stats.trickPerformance),
     search: {
       decisions: total.stats.search.decisions,
       fallbacks: total.stats.search.fallbacks,
@@ -637,6 +754,8 @@ export function formatBenchmarkSummary({
   elapsedMs,
   workerCount,
   search,
+  searchProfile = "benchmark",
+  deterministicSearch = false,
 }) {
   const metrics = getBenchmarkMetrics(total, elapsedMs);
   const candidateLabel = candidate ?? candidateMode ?? "candidate";
@@ -647,10 +766,14 @@ export function formatBenchmarkSummary({
     `Benchmark mode: ${mode}`,
     `Candidate engine: ${candidateLabel}`,
     `Opponent engine: ${opponentLabel}`,
+    `Search profile: ${searchProfile}`,
+    `Deterministic fixed-work strength run: ${deterministicSearch ? "yes" : "no"}`,
     `Workers: ${workerCount}`,
     `Games per orientation: ${gamesPerSide}`,
     `Total games: ${total.games}`,
     `Candidate wins: ${total.wins}/${total.games} (${pct(total.wins, total.games)})`,
+    `95% win-rate interval: ${pct(metrics.winRateLow95, 1)}-${pct(metrics.winRateHigh95, 1)}`,
+    `Approximate Elo delta: ${metrics.approximateEloDelta >= 0 ? "+" : ""}${metrics.approximateEloDelta.toFixed(0)}`,
     `Average final margin: ${metrics.averageMargin.toFixed(1)} points`,
     `Rounds played: ${total.stats.rounds}`,
     `Round score average: candidate ${metrics.candidateRoundScoreAverage.toFixed(1)}, opponent ${metrics.baselineRoundScoreAverage.toFixed(1)}`,
@@ -659,6 +782,8 @@ export function formatBenchmarkSummary({
       total.stats.madeBids.baseline,
       total.stats.madeBids.baseline + total.stats.failedBids.baseline,
     )}`,
+    `Bid/defense split: candidate ${total.stats.rolePerformance.candidate.bidRounds} contracts, ${total.stats.rolePerformance.candidate.sets} defensive sets; opponent ${total.stats.rolePerformance.baseline.bidRounds} contracts, ${total.stats.rolePerformance.baseline.sets} defensive sets`,
+    `Trick points by stage (candidate/opponent): early ${total.stats.trickPerformance.candidate.early.points}/${total.stats.trickPerformance.baseline.early.points}, middle ${total.stats.trickPerformance.candidate.middle.points}/${total.stats.trickPerformance.baseline.middle.points}, endgame ${total.stats.trickPerformance.candidate.endgame.points}/${total.stats.trickPerformance.baseline.endgame.points}`,
     `Decisions: candidate ${total.stats.decisions.candidate}, opponent ${total.stats.decisions.baseline}, total ${metrics.totalDecisions}, average ${metrics.decisionsPerGame.toFixed(
       1,
     )}/game`,

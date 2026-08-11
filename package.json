@@ -5,12 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "test": "node scripts/validate-discard-rule.mjs && node scripts/validate-ai-scenarios.mjs && node scripts/validate-belief-model.mjs && node scripts/validate-evaluation.mjs && node scripts/validate-search-prototype.mjs && node scripts/validate-live-search.mjs && node scripts/validate-champion-snapshot.mjs",
+    "test": "node scripts/validate-discard-rule.mjs && node scripts/validate-ai-scenarios.mjs && node scripts/validate-belief-model.mjs && node scripts/validate-evaluation.mjs && node scripts/validate-search-prototype.mjs && node scripts/validate-tactical-endgames.mjs && node scripts/validate-live-search.mjs && node scripts/validate-champion-snapshot.mjs && node scripts/validate-advancement-gates.mjs && node scripts/validate-holdout-protocol.mjs && node scripts/validate-tournament-config.mjs",
     "build": "vite build",
     "ai:benchmark": "node scripts/benchmark-ai.mjs",
     "ai:benchmark:acceptance": "node scripts/validate-full-benchmark.mjs",
+    "ai:holdout": "node scripts/ai-holdout-protocol.mjs",
     "ai:browser-reliability": "node scripts/strong-ai-browser-harness.mjs",
     "ai:tournament": "node scripts/ai-tournament.mjs",
+    "test:browser": "npm run build && npm run ai:browser-reliability -- --games=1 --hands=1 --fail-on-fallback --no-json && npm run ai:browser-reliability -- --games=1 --hands=1 --forced-timeout --no-json",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
@@ -19,6 +21,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^6.0.2",
+    "playwright": "^1.62.1",
     "vite": "^8.0.16"
   }
 }

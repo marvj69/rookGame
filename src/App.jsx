@@ -195,7 +195,7 @@ function normalizeSavedGame(savedGame) {
     settings: {
       ...initialGame.settings,
       ...savedSettings,
-      aiStrength: normalizeAiStrength(savedSettings.aiStrength),
+      aiStrength: normalizeAiStrength(savedSettings.aiStrength ?? initialGame.settings.aiStrength),
     },
     discardSelection: Array.isArray(savedGame.discardSelection) ? savedGame.discardSelection : initialGame.discardSelection,
     toast: initialGame.toast,
@@ -1627,7 +1627,7 @@ function MenuSettingsView({ settings, targetScore, onSetAiStrength, onToggleMust
         <div className="menu-setting-row">
           <span>
             <strong>Bot Strength</strong>
-            <small>Fast keeps the current play heuristic. Strong uses search for bot play decisions.</small>
+            <small>Strong compares every legal play across sampled hidden hands. Fast skips search for quicker turns.</small>
           </span>
           <AiStrengthControl value={settings.aiStrength} onChange={onSetAiStrength} />
         </div>
