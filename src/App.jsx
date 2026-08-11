@@ -1434,7 +1434,7 @@ function MainMenuScreen({
     <section className="main-menu-screen" aria-label="Main menu">
       <div className="main-menu-shell">
         <aside className="main-menu-brand" aria-label="Rook overview">
-          <img className="main-menu-logo" src="/rook-icon.svg" alt="" aria-hidden="true" />
+          <img className="main-menu-logo" src={`${import.meta.env.BASE_URL}rook-icon.svg`} alt="" aria-hidden="true" />
           <p className="menu-kicker">Partnership card game</p>
           <h1>Rook</h1>
           <p className="menu-copy">Set the table first. Start bidding only when you are ready.</p>

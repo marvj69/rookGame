@@ -59,12 +59,15 @@ function resolvePlaywright() {
 
 function createOptions(args) {
   const port = getArgNumber(args, "port", DEFAULT_PORT, 1);
-  const baseUrl = getArgValue(args, "url") ?? `http://127.0.0.1:${port}`;
+  const requestedPath = getArgValue(args, "path") ?? "/";
+  const normalizedPath = `/${requestedPath.replace(/^\/+|\/+$/g, "")}${requestedPath === "/" ? "" : "/"}`;
+  const baseUrl = getArgValue(args, "url") ?? `http://127.0.0.1:${port}${normalizedPath}`;
   const forcedTimeout = hasFlag(args, "forced-timeout");
   const query = forcedTimeout ? "?strongAiTimeoutMs=0" : (getArgValue(args, "query") ?? "");
 
   return {
     baseUrl,
+    basePath: normalizedPath,
     port,
     games: getArgNumber(args, "games", 1, 1),
     handsPerGame: getArgNumber(args, "hands", 1, 1),
@@ -112,8 +115,8 @@ function startPreview(options) {
     : "/usr/bin/env";
   const childArgs =
     nodeExecutable === "/usr/bin/env"
-      ? ["node", viteBin, "preview", "--host", "127.0.0.1", "--port", String(options.port)]
-      : [viteBin, "preview", "--host", "127.0.0.1", "--port", String(options.port)];
+      ? ["node", viteBin, "preview", "--host", "127.0.0.1", "--port", String(options.port), "--base", options.basePath]
+      : [viteBin, "preview", "--host", "127.0.0.1", "--port", String(options.port), "--base", options.basePath];
   const child = spawn(nodeExecutable, childArgs, {
     cwd: PROJECT_ROOT,
     stdio: ["ignore", "pipe", "pipe"],
@@ -148,10 +151,10 @@ function readExpectedAssets() {
   return {
     appScript,
     style,
-    searchWorker: searchWorker ? `/assets/${searchWorker}` : null,
+    searchWorker: searchWorker && appScript ? path.posix.join(path.posix.dirname(appScript), searchWorker) : null,
     cacheName,
     serviceWorkerIncludesNetworkFirstDocument:
-      serviceWorker.includes('request.mode === "navigate"') && serviceWorker.includes('requestUrl.pathname === "/service-worker.js"'),
+      serviceWorker.includes('request.mode === "navigate"') && serviceWorker.includes("requestUrl.pathname === SERVICE_WORKER_PATH"),
   };
 }
 
@@ -443,7 +446,7 @@ async function collectCacheSanity(page, baseUrl, expectedAssets, observedUrls) {
     styles: [...document.querySelectorAll('link[rel="stylesheet"]')].map((link) => new URL(link.href, location.href).pathname),
     serviceWorkerSupported: "serviceWorker" in navigator,
   }));
-  const serviceWorkerResponse = await fetch(`${baseUrl}/service-worker.js`, { cache: "no-store" });
+  const serviceWorkerResponse = await fetch(new URL("service-worker.js", baseUrl), { cache: "no-store" });
   const servedServiceWorker = await serviceWorkerResponse.text();
   const servedCacheName = servedServiceWorker.match(/CACHE_NAME\s*=\s*"([^"]+)"/)?.[1] ?? null;
   const expectedWorkerAsset = [...observedUrls].find((url) => url.includes("/assets/searchWorker-"));

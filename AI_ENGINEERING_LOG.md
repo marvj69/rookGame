@@ -65,7 +65,8 @@ Private category totals show the gain is broad:
 - Final normal browser hand: 39/39 searches completed, 0 fallbacks/timeouts/errors, average worker time 20.40 ms.
 - 4x CPU-throttled page: 39/39 completed, 0 fallbacks/timeouts/errors.
 - Forced timeout: 39/39 searches took the legal timeout fallback, with 0 illegal/stale/worker errors.
-- Service-worker cache advanced to `rook-game-cache-v6`, and the harness verifies current app, worker, stylesheet, and cache identities.
+- Service-worker cache advanced to `rook-game-cache-v7`, and the harness verifies current app, worker, stylesheet, and cache identities.
+- GitHub Pages now receives the repository-scoped `/rookGame/` production build from GitHub Actions rather than serving the Vite source tree directly.
 - Playwright is a local dev dependency; CI installs Chromium and runs both completion and fallback paths.
 - `npm audit --audit-level=high` reports zero vulnerabilities as of promotion.
 

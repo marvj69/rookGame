@@ -1,9 +1,13 @@
-const CACHE_NAME = "rook-game-cache-v6";
+const CACHE_NAME = "rook-game-cache-v7";
+const SCOPE_PATH = new URL(self.registration.scope).pathname;
+const scopedPath = path => new URL(path, self.registration.scope).pathname;
+const INDEX_PATH = scopedPath("index.html");
+const SERVICE_WORKER_PATH = scopedPath("service-worker.js");
 const ASSETS_TO_CACHE = [
-  "/",
-  "/index.html",
-  "/manifest.webmanifest",
-  "/rook-icon.svg"
+  SCOPE_PATH,
+  INDEX_PATH,
+  scopedPath("manifest.webmanifest"),
+  scopedPath("rook-icon.svg")
 ];
 
 self.addEventListener("install", event => {
@@ -38,7 +42,7 @@ self.addEventListener("fetch", event => {
   }
 
   const requestUrl = new URL(request.url);
-  if (requestUrl.pathname === "/service-worker.js") {
+  if (requestUrl.pathname === SERVICE_WORKER_PATH) {
     return;
   }
 
@@ -50,12 +54,12 @@ self.addEventListener("fetch", event => {
           event.waitUntil(
             caches
               .open(CACHE_NAME)
-              .then(cache => Promise.all([cache.put("/", clone.clone()), cache.put("/index.html", clone)]))
+              .then(cache => Promise.all([cache.put(SCOPE_PATH, clone.clone()), cache.put(INDEX_PATH, clone)]))
               .catch(() => null)
           );
           return networkResponse;
         })
-        .catch(() => caches.match("/index.html"))
+        .catch(() => caches.match(INDEX_PATH))
     );
     return;
   }
@@ -76,7 +80,7 @@ self.addEventListener("fetch", event => {
           );
           return networkResponse;
         })
-        .catch(() => caches.match("/index.html"));
+        .catch(() => caches.match(INDEX_PATH));
     })
   );
 });

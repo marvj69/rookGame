@@ -1,7 +1,8 @@
 {
   "name": "Rook - Mobile Edition",
   "short_name": "Rook",
-  "start_url": ".",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#1e3c1b",
