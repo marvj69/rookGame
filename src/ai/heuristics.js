@@ -16,13 +16,19 @@ import {
   sortHand,
   teamForPlayer,
 } from "../game.js";
+import { evaluateTerminalRound } from "./evaluation.js";
 
 const MAX_BID = 150;
 const MIN_BID = 100;
 const BID_KITTY_SAMPLE_COUNT = 6;
+const BID_CONTRACT_SAMPLE_COUNT = 8;
 const BID_EV_CACHE_LIMIT = 3000;
 const KITTY_ROLLOUT_CANDIDATES = 6;
 const KITTY_ROLLOUT_SAMPLES = 2;
+const KITTY_ROLLOUT_MIN_SAMPLES = 2;
+const KITTY_ROLLOUT_MAX_SAMPLES = 5;
+const KITTY_RACING_CONFIDENCE_Z = 1.15;
+const KITTY_RACING_MIN_MARGIN = 28;
 const TARGET_SCORE = 500;
 const bidEvCache = new Map();
 
@@ -309,7 +315,8 @@ export function chooseBotBid(game, playerId, maxBid = MAX_BID) {
   const currentBidder = game.bidInfo.bidder;
   const nextBid = Math.max(MIN_BID, currentBid + 5);
   const bidLimit = Math.min(maxBid, MAX_BID);
-  const { ceiling } = estimateBidCeiling(hand, game, playerId, nextBid);
+  const estimate = estimateBidCeiling(hand, game, playerId, nextBid);
+  const { ceiling } = estimate;
 
   if (nextBid > bidLimit || nextBid > ceiling) return 0;
 
@@ -320,6 +327,26 @@ export function chooseBotBid(game, playerId, maxBid = MAX_BID) {
   if (currentBidder === null && ceiling < MIN_BID) return 0;
 
   return nextBid <= ceiling ? nextBid : 0;
+}
+
+export function analyzeBotBidDecision(game, playerId, maxBid = MAX_BID) {
+  const nextBid = Math.max(MIN_BID, game.bidInfo.highBid + 5);
+  const estimate = estimateBidCeiling(game.hands[playerId], game, playerId, nextBid);
+  const seedBase =
+    13007 +
+    playerId * 313 +
+    game.hands[playerId].reduce((sum, card) => sum + card.id * 23, 0);
+  const directContract = evaluateBidContractWorlds(game.hands[playerId], playerId, seedBase + 17011);
+
+  return {
+    ...estimate,
+    directCeiling: directContract.ceiling,
+    contractOutcomes: directContract.outcomes,
+    nextBid,
+    bidLimit: Math.min(maxBid, MAX_BID),
+    directOutcome: directContract.outcomes.find((outcome) => outcome.bid === nextBid) ?? null,
+    decision: chooseBotBid(game, playerId, maxBid),
+  };
 }
 
 const KITTY_PLAN_CACHE_LIMIT = 2000;
@@ -540,6 +567,41 @@ function chooseBestHeuristicKittyPlan(fullHand) {
   return getRankedHeuristicKittyPlans(fullHand, 1)[0] || createFallbackKittyPlan(fullHand);
 }
 
+function createFastBidKittyPlan(fullHand) {
+  const plans = [];
+
+  COLORS.forEach((trump) => {
+    const rule = getKittyDiscardRule(fullHand, trump);
+    if (!rule.canSatisfy) return;
+
+    const nonPoints = fullHand
+      .filter((card) => !isPointCard(card))
+      .sort((left, right) => {
+        const leftKeep = colorCardScore(left) + (isTrump(left, trump) ? 30 : 0) + cardLeadPower(left, trump) * 0.02;
+        const rightKeep = colorCardScore(right) + (isTrump(right, trump) ? 30 : 0) + cardLeadPower(right, trump) * 0.02;
+        return leftKeep - rightKeep || left.id - right.id;
+      });
+    const trumpPoints = fullHand
+      .filter((card) => isPointCard(card) && isTrump(card, trump))
+      .sort((left, right) => cardLeadPower(left, trump) - cardLeadPower(right, trump) || left.id - right.id);
+    const discards = [
+      ...nonPoints.slice(0, rule.requiredNonPointCount),
+      ...trumpPoints.slice(0, rule.requiredTrumpPointCount),
+    ];
+    if (!isValidKittyDiscard(fullHand, discards, trump)) return;
+    const discardIds = cardIdSet(discards);
+    const hand = sortHand(fullHand.filter((card) => !discardIds.has(card.id)));
+    plans.push({
+      trump,
+      discards,
+      hand,
+      score: evaluateKeptHand(hand, discards, trump),
+    });
+  });
+
+  return plans.sort((left, right) => right.score - left.score)[0] ?? createFallbackKittyPlan(fullHand);
+}
+
 function createFallbackKittyPlan(fullHand) {
   const trump = COLORS.find((color) => canSatisfyKittyDiscardRule(fullHand, color)) || COLORS[0];
   const discards = [];
@@ -561,10 +623,50 @@ function createFallbackKittyPlan(fullHand) {
   };
 }
 
-function createKittyRolloutGame(plan, context, sampleIndex) {
+function createOpponentWorld(playerId, ownHand, opponentCards) {
+  const hands = [[], [], [], []];
+  hands[playerId] = sortHand(ownHand);
+  let offset = 0;
+
+  for (let otherPlayerId = 0; otherPlayerId < 4; otherPlayerId += 1) {
+    if (otherPlayerId === playerId) continue;
+    hands[otherPlayerId] = sortHand(opponentCards.slice(offset, offset + ownHand.length));
+    offset += ownHand.length;
+  }
+
+  return {
+    hands,
+    fingerprint: hands.map((hand) => hand.map((card) => card.id).join(".")).join("|"),
+  };
+}
+
+function createKittyRolloutWorld(fullHand, context, sampleIndex) {
   const sourceGame = context.game;
   const playerId = context.playerId ?? context.winner ?? sourceGame.bidInfo?.bidder ?? sourceGame.dealer;
-  const knownIds = cardIdSet([...plan.hand, ...plan.discards, ...(sourceGame.tricks ?? []).flatMap((trick) => trick.map((play) => play.card))]);
+  const knownIds = cardIdSet([
+    ...fullHand,
+    ...(sourceGame.tricks ?? []).flatMap((trick) => trick.map((play) => play.card)),
+    ...(sourceGame.currentTrick ?? []).map((play) => play.card),
+  ]);
+  const availableCards = buildDeck().filter((card) => !knownIds.has(card.id));
+  const seed =
+    29017 +
+    sampleIndex * 104729 +
+    playerId * 977 +
+    (sourceGame.bidInfo?.highBid ?? MIN_BID) * 13 +
+    fullHand.reduce((sum, card) => sum + card.id * 19, 0);
+  const sampledCards = shuffleCards(availableCards, seed);
+  return createOpponentWorld(playerId, fullHand.slice(0, 13), sampledCards);
+}
+
+function createIndependentKittyRolloutWorld(plan, context, sampleIndex) {
+  const sourceGame = context.game;
+  const playerId = context.playerId ?? context.winner ?? sourceGame.bidInfo?.bidder ?? sourceGame.dealer;
+  const knownIds = cardIdSet([
+    ...plan.hand,
+    ...plan.discards,
+    ...(sourceGame.tricks ?? []).flatMap((trick) => trick.map((play) => play.card)),
+  ]);
   const availableCards = buildDeck().filter((card) => !knownIds.has(card.id));
   const seed =
     29017 +
@@ -573,16 +675,13 @@ function createKittyRolloutGame(plan, context, sampleIndex) {
     (sourceGame.bidInfo?.highBid ?? MIN_BID) * 13 +
     plan.trump.charCodeAt(0) * 37 +
     plan.discards.reduce((sum, card) => sum + card.id * 19, 0);
-  const sampledCards = shuffleCards(availableCards, seed);
-  const hands = [[], [], [], []];
-  let offset = 0;
+  return createOpponentWorld(playerId, plan.hand, shuffleCards(availableCards, seed));
+}
 
-  hands[playerId] = sortHand(plan.hand);
-  for (let opponentId = 0; opponentId < 4; opponentId += 1) {
-    if (opponentId === playerId) continue;
-    hands[opponentId] = sortHand(sampledCards.slice(offset, offset + plan.hand.length));
-    offset += plan.hand.length;
-  }
+function createKittyRolloutGame(plan, context, world, bidOverride = null) {
+  const sourceGame = context.game;
+  const playerId = context.playerId ?? context.winner ?? sourceGame.bidInfo?.bidder ?? sourceGame.dealer;
+  const hands = world.hands.map((hand, handPlayerId) => (handPlayerId === playerId ? sortHand(plan.hand) : [...hand]));
 
   return {
     ...sourceGame,
@@ -593,9 +692,10 @@ function createKittyRolloutGame(plan, context, sampleIndex) {
     bidInfo: {
       ...(sourceGame.bidInfo ?? {}),
       active: false,
-      highBid: Math.max(MIN_BID, sourceGame.bidInfo?.highBid ?? MIN_BID),
+      highBid: Math.max(MIN_BID, bidOverride ?? sourceGame.bidInfo?.highBid ?? MIN_BID),
       bidder: playerId,
       passed: [...(sourceGame.bidInfo?.passed ?? [false, false, false, false])],
+      history: (sourceGame.bidInfo?.history ?? []).map((action) => ({ ...action })),
     },
     currentTurn: playerId,
     currentTrick: [],
@@ -643,8 +743,8 @@ function resolveRolloutTrick(game) {
   game.currentTurn = winner;
 }
 
-function simulateKittyPlanRound(plan, context, sampleIndex) {
-  const game = createKittyRolloutGame(plan, context, sampleIndex);
+function simulateKittyPlanRound(plan, context, world, bidOverride = null) {
+  const game = createKittyRolloutGame(plan, context, world, bidOverride);
   const playerId = context.playerId ?? context.winner ?? game.bidInfo.bidder;
   const playerTeam = teamForPlayer(playerId);
   const opponent = otherTeam(playerTeam);
@@ -661,29 +761,169 @@ function simulateKittyPlanRound(plan, context, sampleIndex) {
 
   if (guard >= 80) return null;
 
-  const roundScore = completeRoundScore(game).scoreChange;
-  const scoreDiff = roundScore[playerTeam] - roundScore[opponent];
-  const bidMade = roundScore[playerTeam] >= 0;
-  const scores = context.game?.scores ?? { us: 0, them: 0 };
-  const scoreboardDiff = (scores[playerTeam] ?? 0) - (scores[opponent] ?? 0);
-  const riskAdjustment = !bidMade && scoreboardDiff > 80 ? -18 : !bidMade && scoreboardDiff < -120 ? 8 : 0;
+  const completedRound = completeRoundScore(game);
+  const scoreDiff = completedRound.scoreChange[playerTeam] - completedRound.scoreChange[opponent];
+  const bidMade = completedRound.scoreChange[playerTeam] >= 0;
 
-  return scoreDiff + riskAdjustment;
+  return {
+    utility: evaluateTerminalRound(game, playerId),
+    scoreDiff,
+    bidMade,
+    game,
+    completedRound,
+  };
 }
 
-function scoreKittyPlanWithRollouts(plan, context) {
+function pairedPlanDifference(leaderScores, candidateScores) {
+  const count = Math.min(leaderScores.length, candidateScores.length);
+  if (count === 0) return { mean: 0, standardError: Number.POSITIVE_INFINITY };
+  const differences = Array.from({ length: count }, (_, index) => leaderScores[index] - candidateScores[index]);
+  const mean = differences.reduce((sum, value) => sum + value, 0) / count;
+  const variance = differences.reduce((sum, value) => sum + (value - mean) ** 2, 0) / Math.max(1, count - 1);
+  return {
+    mean,
+    standardError: count > 1 ? Math.sqrt(variance / count) : Number.POSITIVE_INFINITY,
+  };
+}
+
+export function evaluateKittyPlansWithSharedWorlds(fullHand, plans, context) {
+  const results = plans.map((plan) => ({
+    ...plan,
+    active: true,
+    dominated: false,
+    rolloutSamples: [],
+    rolloutScore: plan.score,
+  }));
+  const worldFingerprints = [];
+
+  for (let sampleIndex = 0; sampleIndex < KITTY_ROLLOUT_MAX_SAMPLES; sampleIndex += 1) {
+    const world = createKittyRolloutWorld(fullHand, context, sampleIndex);
+    worldFingerprints.push(world.fingerprint);
+
+    results.filter((candidate) => candidate.active).forEach((candidate) => {
+      const simulation = simulateKittyPlanRound(candidate, context, world);
+      if (simulation) candidate.rolloutSamples.push(simulation.utility);
+    });
+
+    if (sampleIndex + 1 < KITTY_ROLLOUT_MIN_SAMPLES) continue;
+    const active = results.filter((candidate) => candidate.active && candidate.rolloutSamples.length > 0);
+    if (active.length <= 1) break;
+    const meanFor = (candidate) =>
+      candidate.rolloutSamples.reduce((sum, score) => sum + score, 0) / candidate.rolloutSamples.length + candidate.score * 0.12;
+    const leader = [...active].sort((left, right) => meanFor(right) - meanFor(left))[0];
+
+    active.forEach((candidate) => {
+      if (candidate === leader) return;
+      const difference = pairedPlanDifference(leader.rolloutSamples, candidate.rolloutSamples);
+      const boundary = KITTY_RACING_MIN_MARGIN + KITTY_RACING_CONFIDENCE_Z * difference.standardError;
+      if (difference.mean > boundary) {
+        candidate.active = false;
+        candidate.dominated = true;
+      }
+    });
+  }
+
+  results.forEach((candidate) => {
+    if (candidate.rolloutSamples.length === 0) return;
+    candidate.rolloutScore =
+      candidate.rolloutSamples.reduce((sum, score) => sum + score, 0) / candidate.rolloutSamples.length +
+      candidate.score * 0.12;
+  });
+
+  return { plans: results, worldFingerprints };
+}
+
+function scoreKittyPlanWithIndependentRollouts(plan, context) {
   let total = 0;
   let samples = 0;
 
   for (let sampleIndex = 0; sampleIndex < KITTY_ROLLOUT_SAMPLES; sampleIndex += 1) {
-    const score = simulateKittyPlanRound(plan, context, sampleIndex);
-    if (score === null) continue;
-    total += score;
+    const world = createIndependentKittyRolloutWorld(plan, context, sampleIndex);
+    const simulation = simulateKittyPlanRound(plan, context, world);
+    if (!simulation) continue;
+
+    const playerId = context.playerId ?? context.winner ?? context.game.bidInfo?.bidder;
+    const playerTeam = teamForPlayer(playerId);
+    const opponent = otherTeam(playerTeam);
+    const scores = context.game?.scores ?? { us: 0, them: 0 };
+    const scoreboardDiff = (scores[playerTeam] ?? 0) - (scores[opponent] ?? 0);
+    const riskAdjustment = !simulation.bidMade && scoreboardDiff > 80 ? -18 : !simulation.bidMade && scoreboardDiff < -120 ? 8 : 0;
+    total += simulation.scoreDiff + riskAdjustment;
     samples += 1;
   }
 
-  if (samples === 0) return plan.score;
-  return total / samples + plan.score * 0.12;
+  return samples === 0 ? plan.score : total / samples + plan.score * 0.12;
+}
+
+function scoreRoundAtBid(simulatedGame, playerId, bid) {
+  const playerTeam = teamForPlayer(playerId);
+  const opponent = otherTeam(playerTeam);
+  const scoringGame = {
+    ...simulatedGame,
+    bidInfo: { ...simulatedGame.bidInfo, highBid: bid, bidder: playerId },
+  };
+  const completedRound = completeRoundScore(scoringGame);
+  return {
+    made: completedRound.scoreChange[playerTeam] >= 0,
+    utility: completedRound.scoreChange[playerTeam] - completedRound.scoreChange[opponent],
+  };
+}
+
+function evaluateBidContractWorlds(hand, playerId, seedBase) {
+  const availableDeck = getBidSampleDeck(hand);
+  const outcomes = Array.from({ length: (MAX_BID - MIN_BID) / 5 + 1 }, (_, index) => ({
+    bid: MIN_BID + index * 5,
+    made: 0,
+    utility: 0,
+    samples: 0,
+  }));
+
+  for (let sampleIndex = 0; sampleIndex < BID_CONTRACT_SAMPLE_COUNT; sampleIndex += 1) {
+    const sampledCards = shuffleCards(availableDeck, seedBase + sampleIndex * 104729);
+    const sampledKitty = sampledCards.slice(0, DISCARD_COUNT);
+    const opponentCards = sampledCards.slice(DISCARD_COUNT);
+    const fullHand = sortHand([...hand, ...sampledKitty]);
+    const plan = createFastBidKittyPlan(fullHand);
+    const world = createOpponentWorld(playerId, plan.hand, opponentCards);
+    const context = {
+      playerId,
+      game: {
+        hands: world.hands,
+        scores: { us: 0, them: 0 },
+        dealer: playerId,
+        currentTurn: playerId,
+        kitty: [],
+        kittyPoints: 0,
+        trump: plan.trump,
+        bidInfo: { active: false, highBid: MIN_BID, bidder: playerId, passed: [false, false, false, false], history: [] },
+        tricks: [],
+        currentTrick: [],
+        pointsTaken: { us: 0, them: 0 },
+        settings: { mustWinByBid: false },
+      },
+    };
+    const simulation = simulateKittyPlanRound(plan, context, world, MIN_BID);
+    if (!simulation) continue;
+
+    outcomes.forEach((outcome) => {
+      const scored = scoreRoundAtBid(simulation.game, playerId, outcome.bid);
+      outcome.made += scored.made ? 1 : 0;
+      outcome.utility += scored.utility;
+      outcome.samples += 1;
+    });
+  }
+
+  const summarized = outcomes.map((outcome) => ({
+    bid: outcome.bid,
+    samples: outcome.samples,
+    makeRate: outcome.samples > 0 ? outcome.made / outcome.samples : 0,
+    averageUtility: outcome.samples > 0 ? outcome.utility / outcome.samples : Number.NEGATIVE_INFINITY,
+  }));
+  const eligible = summarized.filter((outcome) => outcome.makeRate >= 0.5 && outcome.averageUtility >= 0);
+  return {
+    ceiling: eligible.length > 0 ? eligible[eligible.length - 1].bid : 95,
+    outcomes: summarized,
+  };
 }
 
 function canUseKittyRolloutContext(context) {
@@ -703,7 +943,7 @@ export function chooseBotKittyPlan(fullHand, context = null) {
     plan = [...rankedPlans]
       .map((candidate) => ({
         ...candidate,
-        rolloutScore: scoreKittyPlanWithRollouts(candidate, context),
+        rolloutScore: scoreKittyPlanWithIndependentRollouts(candidate, context),
       }))
       .sort((a, b) => {
         const rolloutDiff = b.rolloutScore - a.rolloutScore;

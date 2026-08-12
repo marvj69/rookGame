@@ -30,10 +30,30 @@ The current champion is `champion-2026-08-11`, promoted from the shipped Strong 
 
 ## Still needed for a human-superhuman claim
 
-- [ ] Obtain labels or ranked decisions from demonstrably strong human Rook players for bidding, trump, kitty, and play scenarios.
+- [x] Add a provenance-aware schema and validator for externally supplied expert decisions.
+- [ ] Obtain actual labels or ranked decisions from demonstrably strong human Rook players for bidding, trump, kitty, and play scenarios. The current source count is zero.
 - [ ] Collect complete strong-human games under the exact rules implemented here and evaluate the frozen champion against them.
 - [ ] Expand the oracle pack with adversarial multi-trick cases and independently review their rule assumptions.
 - [ ] Repeat browser reliability on representative low-end physical phones if mobile latency becomes a release criterion.
+
+## Implemented v3-v6 challenger program, not promoted
+
+- [x] Weight hidden-deal particles using bounded public auction and play evidence.
+- [x] Add adaptive paired candidate racing and an information-set tree tie-break.
+- [x] Evaluate all legal bid contracts directly and compare kitty plans on shared worlds.
+- [x] Add match-aware and must-win-by-bid terminal utility.
+- [x] Add paired/seed-cluster bootstrap intervals, opponent leagues, adversarial probes, rule variants, percentile browser latency, and an external-expert evidence gate.
+- [x] Expand the exact tactical pack from 3 to 8 cases.
+- [x] Add optimized exact-five/six search with alpha-beta bounds, shared transpositions, policy-first ordering, safe equivalent-card pruning, and exhaustive equivalence tests.
+- [x] Add a three-card exact handoff inside early sampled rollouts so early choices include the live endgame policy.
+- [x] Add a cryptographic blinded-consideration runner that writes only aggregate evidence and a seed commitment, then deletes raw seeds in `finally`.
+- [x] Reject v4 after exposed consideration: 105/200 (52.5%), +15.8, conservative lower bound 48.5%.
+- [x] Reject v5 after fresh blinded consideration: 108/200 (54.0%), +40.3, conservative lower bound 49.0%.
+- [x] Pass the fresh v6 200-game consideration gate: 116/200 (58.0%), +65.9, conservative lower bound 53.0%, candidate/champion bid make 72.9%/65.6%, zero illegal or unfinished games.
+- [x] Validate v6 in normal, 4x CPU-throttled, forced-timeout, and `/rookGame/` Pages browser runs with zero illegal/stale/worker errors.
+- [ ] Pass a fresh private promotion holdout. Do not generate one before tuning stops.
+
+Current v6 evidence is 27/40 (67.5%) with +85.0 average margin across two independent training waves plus a fresh blinded 116/200 consideration PASS. This promises a substantial gain over the frozen project champion under the simulator, but is not promotion or human-superhuman evidence. The incumbent remains `champion-2026-08-11`; see `NEXT_LEVEL_AI_HANDOFF.md`.
 
 The repository now proves that the August bot is substantially stronger than the best prior bot in this project. It does not yet prove superiority over elite human Rook players.
 

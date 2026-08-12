@@ -1,1 +1,7 @@
-export { chooseBotBid, chooseBotKittyPlan, chooseBotPlay } from "./ai/heuristics.js";
+export {
+  analyzeBotBidDecision,
+  chooseBotBid,
+  chooseBotKittyPlan,
+  chooseBotPlay,
+  evaluateKittyPlansWithSharedWorlds,
+} from "./ai/heuristics.js";

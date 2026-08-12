@@ -44,6 +44,7 @@ const deterministicArgs = [
   "--games=1",
   "--workers=1",
 ];
+assert.equal(createHoldoutOptions(deterministicArgs).seedWorkers, 1, "holdout batches are sequential by default");
 const first = await runHoldoutEvaluation(createHoldoutOptions(deterministicArgs));
 const second = await runHoldoutEvaluation(createHoldoutOptions(deterministicArgs));
 const artifact = createHoldoutArtifact(first);
@@ -61,6 +62,42 @@ assert.equal(
 );
 assert.equal(Object.hasOwn(artifact, "seeds"), false, "durable holdout artifacts do not expose raw seeds");
 assert.equal(artifact.seedGroup.seedCount, 1, "artifact records seed count without listing seed values");
+
+const forwardedSearch = createHoldoutOptions([
+  ...deterministicArgs,
+  "--search-rollout-exact-handoff=4",
+  "--search-rollout-exact-nodes=4321",
+  "--exact-policy-ordering",
+  "--exact-sequence-pruning",
+  "--stratified-sampler",
+  "--search-root-aggregation=borda",
+]);
+assert.equal(
+  forwardedSearch.searchArgs.includes("--search-rollout-exact-handoff=4"),
+  true,
+  "holdout protocol forwards rollout exact handoff overrides",
+);
+assert.equal(
+  forwardedSearch.searchArgs.includes("--search-rollout-exact-nodes=4321"),
+  true,
+  "holdout protocol forwards rollout exact node limits",
+);
+assert.equal(
+  forwardedSearch.searchArgs.includes("--exact-policy-ordering"),
+  true,
+  "holdout protocol forwards exact ordering flags",
+);
+assert.equal(
+  forwardedSearch.searchArgs.includes("--exact-sequence-pruning"),
+  true,
+  "holdout protocol forwards exact pruning flags",
+);
+assert.equal(forwardedSearch.searchArgs.includes("--stratified-sampler"), true, "holdout protocol forwards samplers");
+assert.equal(
+  forwardedSearch.searchArgs.includes("--search-root-aggregation=borda"),
+  true,
+  "holdout protocol forwards root aggregation",
+);
 
 const needsMoreDecision = evaluateHoldoutResult({
   total: first.total,

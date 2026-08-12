@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
-import { chooseBotBid, chooseBotKittyPlan, chooseBotPlay } from "../src/ai.js";
 import {
+  analyzeBotBidDecision,
+  chooseBotBid,
+  chooseBotKittyPlan,
+  chooseBotPlay,
+  evaluateKittyPlansWithSharedWorlds,
+} from "../src/ai.js";
+import {
+  buildDeck,
   createCard,
   getEffectiveColor,
   getLeadColor,
@@ -10,11 +17,18 @@ import {
 } from "../src/game.js";
 
 let nextId = 2000;
+const canonicalDeck = buildDeck();
 
 function card(color, rank) {
   const createdCard = createCard(color, rank, nextId);
   nextId += 1;
   return createdCard;
+}
+
+function canonicalCard(color, rank) {
+  const foundCard = canonicalDeck.find((candidate) => candidate.color === color && candidate.rank === rank);
+  assert.ok(foundCard, `missing canonical ${color} ${rank}`);
+  return foundCard;
 }
 
 function baseGame(overrides = {}) {
@@ -113,6 +127,41 @@ function hiddenHand(playerId) {
 }
 
 {
+  const directEvHand = sortHand([
+    canonicalCard("Red", 14),
+    canonicalCard("Red", 13),
+    canonicalCard("Red", 12),
+    canonicalCard("Red", 11),
+    canonicalCard("Red", 10),
+    canonicalCard("Red", 9),
+    canonicalCard("Red", 5),
+    canonicalCard("ROOK", 0),
+    canonicalCard("Green", 14),
+    canonicalCard("Green", 13),
+    canonicalCard("Black", 14),
+    canonicalCard("Yellow", 2),
+    canonicalCard("Black", 2),
+  ]);
+  const game = baseGame({ hands: [[], directEvHand, [], []] });
+  const analysis = analyzeBotBidDecision(game, 1);
+
+  assert.equal(analysis.contractOutcomes.length, 11, "direct EV evaluates every legal contract from 100 through 150");
+  assert.deepEqual(
+    analysis.contractOutcomes.map((outcome) => outcome.bid),
+    [100, 105, 110, 115, 120, 125, 130, 135, 140, 145, 150],
+    "contract grid advances in legal five-point increments",
+  );
+  assert.equal(
+    analysis.contractOutcomes.every(
+      (outcome) => outcome.samples === 8 && outcome.makeRate >= 0 && outcome.makeRate <= 1 && Number.isFinite(outcome.averageUtility),
+    ),
+    true,
+    "each contract is scored on the same deterministic deal worlds",
+  );
+  assert.ok([0, analysis.nextBid].includes(analysis.decision), "diagnostic decision is either pass or the next legal bid");
+}
+
+{
   const fullHand = sortHand([
     card("Red", 14),
     card("Red", 10),
@@ -142,6 +191,64 @@ function hiddenHand(playerId) {
   assert.equal(isValidKittyDiscard(fullHand, plan.discards, plan.trump), true, "kitty plan obeys discard rules");
   assert.equal(plan.discards.every((discard) => discard.value === 0), true, "kitty plan does not discard points when non-points are available");
   assert.equal([...discardIds].some((id) => keptIds.has(id)), false, "kitty discards are removed from the kept hand");
+}
+
+{
+  const fullHand = sortHand([
+    canonicalCard("Red", 14),
+    canonicalCard("Red", 13),
+    canonicalCard("Red", 10),
+    canonicalCard("Red", 5),
+    canonicalCard("Green", 14),
+    canonicalCard("Green", 10),
+    canonicalCard("Black", 14),
+    canonicalCard("Black", 5),
+    canonicalCard("Yellow", 14),
+    canonicalCard("Yellow", 10),
+    canonicalCard("Red", 2),
+    canonicalCard("Green", 3),
+    canonicalCard("Black", 4),
+    canonicalCard("Yellow", 6),
+    canonicalCard("Red", 7),
+    canonicalCard("Green", 8),
+    canonicalCard("Black", 9),
+    canonicalCard("ROOK", 0),
+  ]);
+  const basePlan = chooseBotKittyPlan(fullHand);
+  const context = {
+    playerId: 1,
+    game: baseGame({
+      hands: [[], fullHand, [], []],
+      currentTurn: 1,
+      bidInfo: {
+        active: false,
+        highBid: 115,
+        bidder: 1,
+        passed: [false, false, false, false],
+        history: [{ playerId: 1, amount: 115 }],
+      },
+      scores: { us: 260, them: 310 },
+    }),
+  };
+  const duplicated = evaluateKittyPlansWithSharedWorlds(
+    fullHand,
+    [basePlan, { ...basePlan, discards: [...basePlan.discards], hand: [...basePlan.hand] }],
+    context,
+  );
+  const repeated = evaluateKittyPlansWithSharedWorlds(fullHand, [basePlan, { ...basePlan }], context);
+
+  assert.ok(duplicated.worldFingerprints.length >= 2 && duplicated.worldFingerprints.length <= 5, "kitty racing uses a bounded world budget");
+  assert.deepEqual(duplicated.worldFingerprints, repeated.worldFingerprints, "kitty deal worlds are deterministic");
+  assert.deepEqual(
+    duplicated.plans[0].rolloutSamples,
+    duplicated.plans[1].rolloutSamples,
+    "identical plans receive identical paired outcomes on shared opponent worlds",
+  );
+  assert.equal(
+    duplicated.plans.every((plan) => isValidKittyDiscard(fullHand, plan.discards, plan.trump)),
+    true,
+    "shared-world racing never mutates plan legality",
+  );
 }
 
 {

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { ADVANCEMENT_GATES, evaluateAdvancementGate } from "./ai-advancement-gates.mjs";
 import { CHALLENGER_ENGINE_ID, CHAMPION_ENGINE_ID } from "./ai-engines.mjs";
-import { eloDeltaFromScore, wilsonScoreInterval } from "./ai-statistics.mjs";
+import {
+  deterministicClusterBootstrapInterval,
+  eloDeltaFromScore,
+  wilsonScoreInterval,
+} from "./ai-statistics.mjs";
 
 function metrics(overrides = {}) {
   return {
@@ -15,6 +19,7 @@ function metrics(overrides = {}) {
     illegalBids: 0,
     illegalDiscards: 0,
     illegalPlays: 0,
+    unfinishedGames: 0,
     ...overrides,
   };
 }
@@ -37,6 +42,20 @@ assert.ok(symmetricInterval.low < 0.5 && symmetricInterval.high > 0.5, "Wilson i
 assert.equal(Math.round(eloDeltaFromScore(0.5)), 0, "an even score has zero Elo delta");
 assert.ok(eloDeltaFromScore(0.75) > 190, "a 75% score produces a large positive Elo delta");
 
+const pairedBootstrap = deterministicClusterBootstrapInterval([0, 0.5, 1, 1], {
+  replicates: 1000,
+  seed: 20260811,
+});
+const repeatedBootstrap = deterministicClusterBootstrapInterval([0, 0.5, 1, 1], {
+  replicates: 1000,
+  seed: 20260811,
+});
+assert.deepEqual(pairedBootstrap, repeatedBootstrap, "paired bootstrap intervals are reproducible");
+assert.ok(
+  pairedBootstrap.low <= 0.625 && pairedBootstrap.high >= 0.625,
+  "paired bootstrap interval contains the observed cluster mean",
+);
+
 assert.equal(promotionReport().passed, true, "a statistically strong, legal live run passes promotion");
 assert.equal(
   promotionReport({ games: 799, wins: 599, winRate: 599 / 799 }).checks.find((check) => check.id === "sample-size").passed,
@@ -57,6 +76,18 @@ assert.equal(
   promotionReport({ illegalMoves: 1, illegalPlays: 1 }).checks.find((check) => check.id === "legality").passed,
   false,
   "any illegal decision fails promotion",
+);
+assert.equal(
+  promotionReport({ unfinishedGames: 1 }).checks.find((check) => check.id === "completed-games").passed,
+  false,
+  "a safety-capped match cannot count as promotion evidence",
+);
+assert.equal(
+  promotionReport({ conservativeWinRateLow95: 0.51, conservativeWinRateHigh95: 0.82 }).checks.find(
+    (check) => check.id === "win-rate-confidence",
+  ).passed,
+  false,
+  "promotion uses the conservative paired or seed-cluster interval when available",
 );
 
 const marginalConsideration = evaluateAdvancementGate({

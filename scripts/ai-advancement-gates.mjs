@@ -122,6 +122,15 @@ export function evaluateAdvancementGate({
     (bidMakeRateDrop <= resolvedGate.maxBidMakeRateDrop &&
       metrics.candidateBidMakeRate >= resolvedGate.minDefensibleBidMakeRate);
   const winRateInterval = wilsonScoreInterval(metrics.wins, metrics.games);
+  const confidenceLow = Number.isFinite(metrics.conservativeWinRateLow95)
+    ? metrics.conservativeWinRateLow95
+    : winRateInterval.low;
+  const confidenceHigh = Number.isFinite(metrics.conservativeWinRateHigh95)
+    ? metrics.conservativeWinRateHigh95
+    : winRateInterval.high;
+  const confidenceMethod = Number.isFinite(metrics.conservativeWinRateLow95)
+    ? "paired/seed-cluster bootstrap"
+    : "Wilson";
 
   const checks = [
     check(
@@ -155,6 +164,12 @@ export function evaluateAdvancementGate({
       `${metrics.games} games; required at least ${resolvedGate.minGames}`,
     ),
     check(
+      "completed-games",
+      "Completed games",
+      (metrics.unfinishedGames ?? 0) === 0,
+      `${metrics.unfinishedGames ?? 0} games reached the simulator safety cap without a valid match winner`,
+    ),
+    check(
       "legality",
       "Legal decisions",
       totalIllegalMoves === 0 && illegalBids === 0 && illegalDiscards === 0 && illegalPlays === 0,
@@ -169,8 +184,8 @@ export function evaluateAdvancementGate({
     check(
       "win-rate-confidence",
       "95% win-rate lower bound",
-      winRateInterval.low >= resolvedGate.minWinRateLowerBound,
-      `${pct(winRateInterval.low)}-${pct(winRateInterval.high)}; lower bound must be at least ${pct(
+      confidenceLow >= resolvedGate.minWinRateLowerBound,
+      `${pct(confidenceLow)}-${pct(confidenceHigh)} (${confidenceMethod}); lower bound must be at least ${pct(
         resolvedGate.minWinRateLowerBound,
       )}`,
     ),

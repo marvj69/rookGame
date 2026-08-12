@@ -158,6 +158,7 @@ if (isMainModule()) {
         search: options.search,
         searchProfile: options.searchProfile,
         deterministicSearch: options.deterministicSearch,
+        mustWinByBid: options.mustWinByBid,
       }).join("\n"),
     );
 

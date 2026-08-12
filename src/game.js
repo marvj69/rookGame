@@ -31,6 +31,7 @@ export function createInitialGame() {
       highBid: 0,
       bidder: null,
       passed: [false, false, false, false],
+      history: [],
     },
     trump: null,
     tricks: [],
@@ -60,6 +61,7 @@ export function cloneGameState(state) {
     bidInfo: {
       ...state.bidInfo,
       passed: [...state.bidInfo.passed],
+      history: (state.bidInfo.history ?? []).map((action) => ({ ...action })),
     },
     tricks: state.tricks.map((trick) => trick.map((play) => ({ ...play }))),
     roundsCompleted: state.roundsCompleted,

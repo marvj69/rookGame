@@ -19,7 +19,11 @@ import {
   resolveEngineId,
 } from "./ai-engines.mjs";
 import { DEFAULT_BENCHMARK_SEED } from "./ai-seed-groups.mjs";
-import { eloDeltaFromScore, wilsonScoreInterval } from "./ai-statistics.mjs";
+import {
+  deterministicClusterBootstrapInterval,
+  eloDeltaFromScore,
+  wilsonScoreInterval,
+} from "./ai-statistics.mjs";
 
 const TARGET_SCORE = 500;
 const MAX_BID = 150;
@@ -88,14 +92,55 @@ export function parseBenchmarkArgs(args = process.argv.slice(2)) {
     ["search-sample-attempts", "maxSampleAttempts", { min: 1 }],
     ["search-endgame", "exactEndgameHandSize", { min: 0 }],
     ["search-node-limit", "exactNodeLimit", { min: 1 }],
+    ["search-exact-weight", "exactValueWeight", { min: 0 }],
+    ["search-exact-pure-hand", "exactPureHandSize", { min: 0 }],
+    ["search-exact-min-position", "exactMaxHandMinTrickPosition", { min: 0 }],
+    ["search-exact-max-position", "exactMaxHandMaxTrickPosition", { min: 0 }],
+    ["search-exact-opponent-branches", "exactOpponentMaxBranches", { min: 0 }],
+    ["search-exact-opponent-pure-hand", "exactOpponentPureHandSize", { min: 0 }],
+    ["search-exact-min-known-voids", "exactMaxHandMinKnownVoids", { min: 0 }],
     ["search-rollout-max-hand", "rolloutMaxHandSize", { min: 0, allowInfinity: true }],
+    ["search-rollout-exact-handoff", "rolloutExactHandoffHandSize", { min: 0 }],
+    ["search-rollout-exact-nodes", "rolloutExactNodeLimit", { min: 1 }],
+    ["search-trick-plies", "trickLookaheadPlies", { min: 0 }],
+    ["search-trick-branches", "trickLookaheadBranches", { min: 1 }],
+    ["search-trick-blend", "trickLookaheadBlend", { min: 0 }],
+    ["search-start-trick", "searchStartTrick", { min: 0 }],
+    ["search-opening-margin", "openingOverrideMargin", { min: 0 }],
+    ["search-heuristic-margin", "heuristicOverrideMargin", { min: 0 }],
+    ["search-heuristic-z", "heuristicOverrideZ", { min: 0 }],
     ["search-early-stop", "earlyStopLead", { min: 0, allowNull: true }],
+    ["search-adaptive-min-samples", "adaptiveMinSamples", { min: 1 }],
+    ["search-adaptive-z", "adaptiveConfidenceZ", { min: 0 }],
+    ["search-adaptive-margin", "adaptiveScoreMargin", { min: 0 }],
+    ["search-information-iterations", "informationSetIterations", { min: 0 }],
+    ["search-information-plies", "informationSetTreePlies", { min: 1 }],
+    ["search-information-candidates", "informationSetMaxCandidates", { min: 2 }],
+    ["search-information-trigger", "informationSetTriggerMargin", { min: 0, allowInfinity: true }],
+    ["search-information-exploration", "informationSetExploration", { min: 0 }],
+    ["search-information-blend", "informationSetBlend", { min: 0 }],
+    ["search-risk-aversion", "riskAversion", { min: 0 }],
+    ["search-root-cvar-fraction", "rootCvarFraction", { min: 0 }],
   ];
 
   overrideSpecs.forEach(([argName, configKey, parseOptions]) => {
     const value = getOptionalSearchNumber(args, argName, parseOptions);
     if (value !== undefined) searchOverrides[configKey] = value;
   });
+  if (hasFlag(args, "no-belief-weighting")) searchOverrides.beliefWeighting = false;
+  if (hasFlag(args, "belief-weighting")) searchOverrides.beliefWeighting = true;
+  if (hasFlag(args, "no-adaptive-sampling")) searchOverrides.adaptiveSampling = false;
+  if (hasFlag(args, "adaptive-sampling")) searchOverrides.adaptiveSampling = true;
+  if (hasFlag(args, "no-information-set")) searchOverrides.informationSetIterations = 0;
+  if (hasFlag(args, "exact-policy-ordering")) searchOverrides.exactPolicyOrdering = true;
+  if (hasFlag(args, "no-exact-policy-ordering")) searchOverrides.exactPolicyOrdering = false;
+  if (hasFlag(args, "exact-sequence-pruning")) searchOverrides.exactSequencePruning = true;
+  if (hasFlag(args, "no-exact-sequence-pruning")) searchOverrides.exactSequencePruning = false;
+  if (hasFlag(args, "matching-sampler")) searchOverrides.hiddenHandSampler = "matching";
+  if (hasFlag(args, "stratified-sampler")) searchOverrides.hiddenHandSampler = "stratified";
+  if (hasFlag(args, "greedy-sampler")) searchOverrides.hiddenHandSampler = "greedy";
+  const rootAggregation = getArgValue(args, "search-root-aggregation");
+  if (rootAggregation) searchOverrides.rootAggregation = rootAggregation;
 
   return {
     mode,
@@ -109,6 +154,8 @@ export function parseBenchmarkArgs(args = process.argv.slice(2)) {
     workerCount: requestedWorkers ?? (hasFlag(args, "parallel") || mode === "full" ? "auto" : 1),
     searchProfile,
     deterministicSearch: searchProfile === "live" && !hasFlag(args, "wall-clock-search"),
+    mustWinByBid:
+      hasFlag(args, "must-win-by-bid") || ["1", "true", "yes", "on"].includes(String(getArgValue(args, "must-win-by-bid") ?? "").toLowerCase()),
     searchOverrides,
     search: normalizeSearchConfig({
       ...profileSearchConfig,
@@ -261,6 +308,7 @@ export function createPublicSearchView(state, playerId) {
     bidInfo: {
       ...state.bidInfo,
       passed: [...state.bidInfo.passed],
+      history: (state.bidInfo.history ?? []).map((action) => ({ ...action })),
     },
     tricks: state.tricks.map((trick) => trick.map((play) => ({ ...play }))),
     currentTrick: state.currentTrick.map((play) => ({ ...play })),
@@ -344,7 +392,7 @@ function choosePlayCard(state, playerId, candidateTeam, stats, strategies, optio
   return result.card;
 }
 
-function createGame(seed) {
+function createGame(seed, options = {}) {
   const random = createRandom(seed);
 
   return {
@@ -361,12 +409,13 @@ function createGame(seed) {
         highBid: 0,
         bidder: null,
         passed: [false, false, false, false],
+        history: [],
       },
       trump: null,
       tricks: [],
       currentTrick: [],
       pointsTaken: { us: 0, them: 0 },
-      settings: { mustWinByBid: false },
+      settings: { mustWinByBid: Boolean(options.mustWinByBid) },
     },
   };
 }
@@ -387,6 +436,7 @@ function prepareRound(game) {
     highBid: BID_START,
     bidder: null,
     passed: [false, false, false, false],
+    history: [],
   };
   state.dealer = (state.dealer + 1) % 4;
   state.currentTurn = (state.dealer + 1) % 4;
@@ -421,6 +471,7 @@ function runBidding(state, candidateTeam, stats, strategies) {
       failIllegal(stats, "bids", `Strategy ${label} returned an illegal bid ${amount}; expected 0 or ${nextBid}-${MAX_BID}.`);
     }
 
+    state.bidInfo.history.push({ playerId: state.currentTurn, amount });
     if (amount > 0) {
       state.bidInfo.highBid = amount;
       state.bidInfo.bidder = state.currentTurn;
@@ -551,22 +602,25 @@ function playRound(state, candidateTeam, stats, strategies, options) {
   stats.rounds += 1;
   stats.roundScore.candidate += roundScore.scoreChange[candidateTeam];
   stats.roundScore.baseline += roundScore.scoreChange[candidateTeam === "us" ? "them" : "us"];
+  return roundScore;
 }
 
 function simulateGame(seed, candidateTeam, strategies, options) {
-  const game = createGame(seed);
+  const game = createGame(seed, options);
   const stats = createStats();
   game.state.searchContext = {
     baseSeed: options.search.seed + seed * 37,
     decisionIndex: 0,
   };
 
-  while (
-    Math.max(game.state.scores.us, game.state.scores.them) < TARGET_SCORE &&
-    stats.rounds < MAX_ROUNDS_PER_GAME
-  ) {
+  let gameFinished = false;
+  while (!gameFinished && stats.rounds < MAX_ROUNDS_PER_GAME) {
     prepareRound(game);
-    playRound(game.state, candidateTeam, stats, strategies, options);
+    const roundScore = playRound(game.state, candidateTeam, stats, strategies, options);
+    const leadingTeam = game.state.scores.us >= game.state.scores.them ? "us" : "them";
+    const reachedTarget = game.state.scores[leadingTeam] >= TARGET_SCORE;
+    const canWin = !game.state.settings.mustWinByBid || roundScore.bidTeam === leadingTeam;
+    gameFinished = reachedTarget && canWin;
   }
 
   const candidateScore = game.state.scores[candidateTeam];
@@ -578,6 +632,7 @@ function simulateGame(seed, candidateTeam, strategies, options) {
     baselineScore,
     candidateWon: candidateScore > baselineScore,
     margin: candidateScore - baselineScore,
+    gameFinished,
     stats,
   };
 }
@@ -633,6 +688,8 @@ export function createBenchmarkTotal() {
     games: 0,
     wins: 0,
     margin: 0,
+    unfinishedGames: 0,
+    pairs: [],
     stats: createStats(),
   };
 }
@@ -641,6 +698,8 @@ export function mergeBenchmarkTotals(total, next) {
   total.games += next.games;
   total.wins += next.wins;
   total.margin += next.margin;
+  total.unfinishedGames += next.unfinishedGames ?? 0;
+  total.pairs.push(...(next.pairs ?? []));
   mergeStats(total.stats, next.stats);
   return total;
 }
@@ -656,13 +715,44 @@ export function getBenchmarkMetrics(total, elapsedMs = 0) {
     total.stats.search.decisions > 0 ? total.stats.search.runtimeMs / total.stats.search.decisions : 0;
   const winRate = total.games > 0 ? total.wins / total.games : 0;
   const winRateInterval = wilsonScoreInterval(total.wins, total.games);
+  const pairScores = (total.pairs ?? []).map((pair) => pair.candidateWins / Math.max(1, pair.games));
+  const pairedInterval = deterministicClusterBootstrapInterval(pairScores, {
+    seed: 20260811 + total.games,
+  });
+  const seedGroups = new Map();
+  (total.pairs ?? []).forEach((pair) => {
+    const group = seedGroups.get(pair.suiteSeed) ?? { wins: 0, games: 0 };
+    group.wins += pair.candidateWins;
+    group.games += pair.games;
+    seedGroups.set(pair.suiteSeed, group);
+  });
+  const seedClusterInterval = deterministicClusterBootstrapInterval(
+    [...seedGroups.values()].map((group) => group.wins / Math.max(1, group.games)),
+    { seed: 20260811 + seedGroups.size * 97 },
+  );
+  const useSeedClusters = seedClusterInterval.clusters >= 4;
+  const conservativeWinRateLow95 = useSeedClusters
+    ? Math.min(pairedInterval.low, seedClusterInterval.low)
+    : pairedInterval.low;
+  const conservativeWinRateHigh95 = useSeedClusters
+    ? Math.max(pairedInterval.high, seedClusterInterval.high)
+    : pairedInterval.high;
 
   return {
     games: total.games,
+    unfinishedGames: total.unfinishedGames ?? 0,
     wins: total.wins,
     winRate,
     winRateLow95: winRateInterval.low,
     winRateHigh95: winRateInterval.high,
+    pairedWinRateLow95: pairedInterval.low,
+    pairedWinRateHigh95: pairedInterval.high,
+    pairedClusters: pairedInterval.clusters,
+    seedClusterWinRateLow95: seedClusterInterval.low,
+    seedClusterWinRateHigh95: seedClusterInterval.high,
+    seedClusters: seedClusterInterval.clusters,
+    conservativeWinRateLow95,
+    conservativeWinRateHigh95,
     approximateEloDelta: total.games > 0 ? eloDeltaFromScore(winRate) : 0,
     averageMargin: total.games > 0 ? total.margin / total.games : 0,
     rounds: total.stats.rounds,
@@ -704,6 +794,7 @@ export function createBenchmarkFingerprint(total) {
     games: total.games,
     wins: total.wins,
     margin: total.margin,
+    unfinishedGames: total.unfinishedGames ?? 0,
     rounds: total.stats.rounds,
     bids: { ...total.stats.bids },
     roundBids: { ...total.stats.roundBids },
@@ -720,6 +811,12 @@ export function createBenchmarkFingerprint(total) {
       samples: total.stats.search.samples,
       timeouts: total.stats.search.timeouts,
     },
+    paired: {
+      pairs: total.pairs?.length ?? 0,
+      candidateWins: (total.pairs ?? []).reduce((sum, pair) => sum + pair.candidateWins, 0),
+      games: (total.pairs ?? []).reduce((sum, pair) => sum + pair.games, 0),
+      margin: (total.pairs ?? []).reduce((sum, pair) => sum + pair.margin, 0),
+    },
     illegalMoves: total.stats.illegalMoves,
     illegal: { ...total.stats.illegal },
   };
@@ -730,14 +827,26 @@ export function simulateBenchmarkRange({ startIndex = 0, gamesPerSide, seed, str
   const benchmarkOptions = options ?? parseBenchmarkArgs([]);
 
   for (let index = startIndex; index < startIndex + gamesPerSide; index += 1) {
+    const pair = {
+      suiteSeed: seed,
+      dealSeed: seed + index * 97,
+      candidateWins: 0,
+      games: 0,
+      margin: 0,
+    };
     for (const candidateTeam of ["us", "them"]) {
       const gameSeed = seed + index * 97;
       const result = simulateGame(gameSeed, candidateTeam, strategies, benchmarkOptions);
       total.games += 1;
       total.wins += result.candidateWon ? 1 : 0;
       total.margin += result.margin;
+      total.unfinishedGames += result.gameFinished ? 0 : 1;
+      pair.candidateWins += result.candidateWon ? 1 : 0;
+      pair.games += 1;
+      pair.margin += result.margin;
       mergeStats(total.stats, result.stats);
     }
+    total.pairs.push(pair);
   }
 
   return total;
@@ -756,6 +865,7 @@ export function formatBenchmarkSummary({
   search,
   searchProfile = "benchmark",
   deterministicSearch = false,
+  mustWinByBid = false,
 }) {
   const metrics = getBenchmarkMetrics(total, elapsedMs);
   const candidateLabel = candidate ?? candidateMode ?? "candidate";
@@ -768,11 +878,17 @@ export function formatBenchmarkSummary({
     `Opponent engine: ${opponentLabel}`,
     `Search profile: ${searchProfile}`,
     `Deterministic fixed-work strength run: ${deterministicSearch ? "yes" : "no"}`,
+    `Must win by bid: ${mustWinByBid ? "yes" : "no"}`,
     `Workers: ${workerCount}`,
     `Games per orientation: ${gamesPerSide}`,
     `Total games: ${total.games}`,
+    `Unfinished games at safety cap: ${total.unfinishedGames ?? 0}`,
     `Candidate wins: ${total.wins}/${total.games} (${pct(total.wins, total.games)})`,
     `95% win-rate interval: ${pct(metrics.winRateLow95, 1)}-${pct(metrics.winRateHigh95, 1)}`,
+    `Paired bootstrap interval: ${pct(metrics.pairedWinRateLow95, 1)}-${pct(metrics.pairedWinRateHigh95, 1)} (${metrics.pairedClusters} mirrored deal pairs)`,
+    metrics.seedClusters >= 4
+      ? `Seed-cluster bootstrap interval: ${pct(metrics.seedClusterWinRateLow95, 1)}-${pct(metrics.seedClusterWinRateHigh95, 1)} (${metrics.seedClusters} seed clusters)`
+      : `Seed-cluster bootstrap interval: not reported (${metrics.seedClusters} seed cluster${metrics.seedClusters === 1 ? "" : "s"})`,
     `Approximate Elo delta: ${metrics.approximateEloDelta >= 0 ? "+" : ""}${metrics.approximateEloDelta.toFixed(0)}`,
     `Average final margin: ${metrics.averageMargin.toFixed(1)} points`,
     `Rounds played: ${total.stats.rounds}`,
@@ -793,6 +909,7 @@ export function formatBenchmarkSummary({
       1,
     )} ms, play ${total.stats.decisionKindRuntimeMs.play.toFixed(1)} ms`,
     `Search config: time ${search.timeLimitMs} ms, max samples ${search.samples}, seed ${search.seed}, min samples ${search.minSamples}`,
+    `Belief/adaptive/information-set: weighting ${search.beliefWeighting ? "on" : "off"}, adaptive ${search.adaptiveSampling ? "on" : "off"} (min ${search.adaptiveMinSamples}), tree ${search.informationSetIterations} iterations x ${search.informationSetTreePlies} plies`,
     `Search decisions: ${total.stats.search.decisions}`,
     `Search fallback decisions: ${total.stats.search.fallbacks} (${pct(total.stats.search.fallbacks, total.stats.search.decisions)})`,
     `Search samples evaluated: ${total.stats.search.samples}`,

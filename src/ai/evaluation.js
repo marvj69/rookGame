@@ -2,6 +2,7 @@ import { completeRoundScore, getCardPower, getLeadColor, isTrumpCard, teamForPla
 import { normalizeEvaluationWeights } from "./config.js";
 
 const MIN_BID = 100;
+const TARGET_SCORE = 500;
 
 function opponentTeam(team) {
   return team === "us" ? "them" : "us";
@@ -60,8 +61,66 @@ export function getBidContext(game) {
 export function evaluateTerminalRound(game, playerId, weights = null) {
   const evaluation = normalizeEvaluationWeights(weights);
   const playerTeam = teamForPlayer(playerId);
-  const score = completeRoundScore(game).scoreChange;
-  return (score[playerTeam] - score[opponentTeam(playerTeam)]) * evaluation.terminalEv;
+  const completedRound = completeRoundScore(game);
+  const score = completedRound.scoreChange;
+  const roundUtility = (score[playerTeam] - score[opponentTeam(playerTeam)]) * evaluation.terminalEv;
+  return roundUtility + evaluateMatchStateAfterRound(game, playerId, completedRound, evaluation);
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+export function getProjectedMatchOutcome(game, completedRound = completeRoundScore(game)) {
+  const scores = game.scores ?? { us: 0, them: 0 };
+  const projectedScores = {
+    us: (scores.us ?? 0) + completedRound.scoreChange.us,
+    them: (scores.them ?? 0) + completedRound.scoreChange.them,
+  };
+  const leadingTeam = projectedScores.us >= projectedScores.them ? "us" : "them";
+  const reachedTarget = projectedScores[leadingTeam] >= TARGET_SCORE;
+  const mustWinByBid = Boolean(game.settings?.mustWinByBid);
+  const canWin = !mustWinByBid || completedRound.bidTeam === leadingTeam;
+
+  return {
+    projectedScores,
+    leadingTeam,
+    reachedTarget,
+    canWin,
+    winnerTeam: reachedTarget && canWin ? leadingTeam : null,
+    mustWinByBid,
+  };
+}
+
+export function evaluateMatchStateAfterRound(game, playerId, completedRound = completeRoundScore(game), weights = null) {
+  const evaluation = normalizeEvaluationWeights(weights);
+  const playerTeam = teamForPlayer(playerId);
+  const opponent = opponentTeam(playerTeam);
+  const outcome = getProjectedMatchOutcome(game, completedRound);
+  const playerScore = outcome.projectedScores[playerTeam];
+  const opponentScore = outcome.projectedScores[opponent];
+
+  if (outcome.winnerTeam) {
+    return outcome.winnerTeam === playerTeam ? evaluation.matchWinReward : -evaluation.matchWinReward;
+  }
+
+  const progress = clamp(
+    (Math.max(playerScore, opponentScore) / TARGET_SCORE - evaluation.matchPressureStart) /
+      Math.max(0.01, 1 - evaluation.matchPressureStart),
+    0,
+    1,
+  );
+  const leadSignal = Math.tanh((playerScore - opponentScore) / Math.max(1, evaluation.matchLeadScale));
+  let utility = progress * leadSignal * evaluation.matchLeadReward;
+
+  if (outcome.mustWinByBid && playerScore >= TARGET_SCORE && completedRound.bidTeam !== playerTeam) {
+    utility -= evaluation.mustWinBidPressure;
+  }
+  if (outcome.mustWinByBid && opponentScore >= TARGET_SCORE && completedRound.bidTeam !== opponent) {
+    utility += evaluation.mustWinBidPressure;
+  }
+
+  return utility;
 }
 
 export function evaluateRoundState(game, playerId, weights = null) {

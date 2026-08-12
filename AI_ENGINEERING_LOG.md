@@ -4,17 +4,20 @@
 
 `champion-2026-08-11` is the new frozen project champion. It is substantially better than the previous best project bot, `champion-2026-07-02`, under the implemented rules and deterministic simulator. The strongest evidence is the fresh private holdout: 732 wins in 800 mirrored games (91.5%), +500.0 average final margin, 89.4%-93.2% Wilson interval, approximately +413 Elo, and zero illegal moves.
 
+Moving source now contains the unpromoted `live-challenger-v6-exact-6-rollout-3` work described in `NEXT_LEVEL_AI_HANDOFF.md`. Across two independent training waves it scored 27/40 (67.5%) with +85.0 average margin against the August champion, versus v5's 23/40 (57.5%) and +74.3. It then passed a fresh blinded 200-game consideration gate at 116/200 (58.0%), +65.9 average margin, and a conservative 53.0% lower bound, with zero illegal or unfinished games. This satisfies the predeclared “promises a substantial project-bot gain” threshold, but it must remain a challenger until the later promotion/private/browser sequence passes.
+
 This is not evidence that the bot is stronger than elite human Rook players. There is no qualified human game corpus or external expert label set in the repository. The tactical fixtures are exhaustive, engineered oracle cases—not external human opinions.
 
-## Retained architecture
+## Frozen incumbent architecture
 
-The shipped Strong bot uses `live-challenger-v2`:
+The frozen August champion uses `live-challenger-v2`. Moving source uses the experimental `live-challenger-v6-exact-6-rollout-3` profile:
 
 - 32 fixed hidden-deal samples for every play with more than one legal card;
 - the same sampled deal is scored for every legal candidate, and a partial candidate set is discarded;
 - full-round heuristic rollouts instead of stopping at a shallow leaf for early/middle play;
-- exact minimax search once the largest remaining hand has three cards;
-- a 20,000-node exact-search cap;
+- optimized exact minimax search once the largest remaining hand has six cards;
+- a 10,000-node exact-search cap with alpha-beta bounds, transpositions, move ordering, and safe equivalent-card pruning;
+- early heuristic rollouts that hand the final three cards to the exact solver instead of assuming heuristic play through the end;
 - deterministic public-state seeds and no access to hidden hands or kitty cards;
 - a five-second worker watchdog in the app, with a legal heuristic fallback if the worker fails or times out.
 
@@ -40,7 +43,19 @@ Small tuning matches are directional only; promotion decisions came from the 800
 | Bid ceiling -5 | 38/40, 95.0%, +522.5 | Reject; lower margin than retained profile |
 | Kitty search expanded to 10 candidates x 6 samples | 35/40, 87.5%, +481.4 | Reject |
 
-No rejected behavioral experiment remains in moving source.
+Moving source retains disabled, unit-tested diagnostic implementations for rejected v3-v6 hypotheses. Only the exact-six solver and exact-three rollout handoff are enabled in the live profile. See `NEXT_LEVEL_AI_HANDOFF.md` before enabling any diagnostic feature.
+
+## 2026-08-12 challenger program
+
+The advancement standard was deliberately stricter than a favorable training aggregate:
+
+| Candidate | Development evidence | Independent gate | Decision |
+| --- | --- | --- | --- |
+| v4 exact-five | 13/20 (65.0%) on its best training screen | Exposed 105/200 (52.5%), +15.8, conservative lower 48.5% | Reject |
+| v5 exact-six | 23/40 (57.5%), +74.3 across two training waves | Fresh blinded 108/200 (54.0%), +40.3, conservative lower 49.0% | Reject |
+| v6 exact-six + rollout exact-three handoff | 27/40 (67.5%), +85.0; independently 14/20 and 13/20 | Fresh blinded 116/200 (58.0%), +65.9, conservative lower 53.0%, bid make 72.9% / 65.6% | Consideration PASS; not promoted |
+
+All three candidate lines recorded zero illegal and zero unfinished games. The v5 private artifact contains only aggregate evidence and seed commitment `5a828e5bb88767806c0d4aece406fdd371aeb1517c16afb87c5d74d6c6d730d7`; the v6 artifact contains only aggregate evidence and commitment `9b9eaf340ccd06150045599820ada8cfd4c3c62fbf0ba759853c26e16f5b339f`. Their raw seeds were deleted and must never become tuning data. A stale mode-600 seed file from an interrupted v6 attempt was also removed, and the blinded runner now cleans up on normal termination signals.
 
 ## Promotion evidence
 
@@ -61,11 +76,15 @@ Private category totals show the gain is broad:
 
 ## Browser and product proof
 
+- Final v6 normal browser hand: 39/39 searches completed, 0 fallbacks/timeouts/errors, 3.56-second p99 under the five-second watchdog.
+- Final v6 4x CPU-throttled hand: 39/39 completed, 0 fallbacks/timeouts/errors, 2.04-second p99.
+- Final v6 forced-timeout hand: all 39 searches took the legal fallback with 0 illegal/stale/worker errors.
+- Final v6 `/rookGame/` Pages hand: 39/39 completed with 0 fallbacks/timeouts/errors and correctly scoped app/worker assets.
 - Production build: Vite 8 build passed.
 - Final normal browser hand: 39/39 searches completed, 0 fallbacks/timeouts/errors, average worker time 20.40 ms.
 - 4x CPU-throttled page: 39/39 completed, 0 fallbacks/timeouts/errors.
 - Forced timeout: 39/39 searches took the legal timeout fallback, with 0 illegal/stale/worker errors.
-- Service-worker cache advanced to `rook-game-cache-v7`, and the harness verifies current app, worker, stylesheet, and cache identities.
+- The v2 promotion used `rook-game-cache-v7`; the finalized v6 worktree advances it to `rook-game-cache-v9`, and the harness verifies current app, worker, stylesheet, and cache identities.
 - GitHub Pages now receives the repository-scoped `/rookGame/` production build from GitHub Actions rather than serving the Vite source tree directly.
 - Playwright is a local dev dependency; CI installs Chromium and runs both completion and fallback paths.
 - `npm audit --audit-level=high` reports zero vulnerabilities as of promotion.
@@ -80,3 +99,4 @@ Private category totals show the gain is broad:
 6. Generate private seeds only after tuning stops and keep the raw file outside the repository. Store only the aggregate commitment/artifact in the repo; the runner rejects in-repository seed files.
 7. After a successful promotion, copy the exact validated source to a new named snapshot and move `CHAMPION_ENGINE_ID` forward without deleting older champions.
 8. Do not call the bot human-superhuman until qualified human evidence exists.
+9. Read `NEXT_LEVEL_AI_HANDOFF.md` before changing the moving challenger; it records the consumed v4/v5 gates, rejected variants, v6 architecture, and current non-promotion evidence.

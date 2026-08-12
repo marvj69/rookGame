@@ -17,6 +17,15 @@ export const AI_SEED_GROUPS = Object.freeze({
     defaultGamesPerSeed: 10,
     description: "Seeds reserved for search-weight tuning and candidate iteration.",
   }),
+  "tuning-training-2026-08-wave2": Object.freeze({
+    id: "tuning-training-2026-08-wave2",
+    label: "Second-wave tuning seeds",
+    role: "training",
+    locked: false,
+    seeds: Object.freeze([20260821, 20260822, 20260823, 20260824, 20260825, 20260826, 20260827, 20260828, 20260829, 20260830]),
+    defaultGamesPerSeed: 1,
+    description: "Fresh training seeds reserved after the v4 public consideration screen; never use them as validation evidence.",
+  }),
   "public-validation-2026-08": Object.freeze({
     id: "public-validation-2026-08",
     label: "Public regression validation seeds",

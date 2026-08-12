@@ -1,4 +1,4 @@
-const CACHE_NAME = "rook-game-cache-v7";
+const CACHE_NAME = "rook-game-cache-v9";
 const SCOPE_PATH = new URL(self.registration.scope).pathname;
 const scopedPath = path => new URL(path, self.registration.scope).pathname;
 const INDEX_PATH = scopedPath("index.html");

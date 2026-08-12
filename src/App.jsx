@@ -36,6 +36,7 @@ const COMPLETED_GAMES_STORAGE_KEY = "rook.completedGames";
 const ACTIVE_GAME_STORAGE_KEY = "rook.activeGame:v1";
 const ACTIVE_GAME_STORAGE_VERSION = 1;
 const MAX_COMPLETED_GAMES = 20;
+const MAX_STRONG_AI_METRIC_SAMPLES = 500;
 
 const PLAY_SLOTS = [
   { top: "65%", left: "50%" },
@@ -67,6 +68,7 @@ function prepareRoundState(state) {
     highBid: BID_START,
     bidder: null,
     passed: [false, false, false, false],
+    history: [],
   };
   state.dealer = (state.dealer + 1) % PLAYER_COUNT;
   state.currentTurn = (state.dealer + 1) % PLAYER_COUNT;
@@ -188,6 +190,18 @@ function normalizeSavedGame(savedGame) {
       passed: initialGame.bidInfo.passed.map((initialValue, index) =>
         Array.isArray(savedBidInfo.passed) ? Boolean(savedBidInfo.passed[index]) : initialValue,
       ),
+      history: Array.isArray(savedBidInfo.history)
+        ? savedBidInfo.history
+            .filter(
+              (action) =>
+                Number.isInteger(action?.playerId) &&
+                action.playerId >= 0 &&
+                action.playerId < PLAYER_COUNT &&
+                Number.isInteger(action?.amount) &&
+                (action.amount === 0 || (action.amount >= 100 && action.amount <= BID_MAX && action.amount % 5 === 0)),
+            )
+            .map((action) => ({ playerId: action.playerId, amount: action.amount }))
+        : [],
     },
     tricks: Array.isArray(savedGame.tricks) ? savedGame.tricks : initialGame.tricks,
     currentTrick: Array.isArray(savedGame.currentTrick) ? savedGame.currentTrick : initialGame.currentTrick,
@@ -485,6 +499,11 @@ export default function App() {
       averageTransportMs: 0,
       totalSamples: 0,
       averageSamples: 0,
+      workerDurationsMs: [],
+      roundTripDurationsMs: [],
+      publicViewDurationsMs: [],
+      transportDurationsMs: [],
+      samplesPerDecision: [],
       fallbackReasons: {},
       timeoutContexts: [],
       lastContext: null,
@@ -519,6 +538,13 @@ export default function App() {
     stats.totalMessageMs += transportMs;
     stats.totalTransportMs += transportMs;
     stats.totalSamples += result.samplesUsed ?? 0;
+    stats.workerDurationsMs = [...(stats.workerDurationsMs ?? []), workerMs].slice(-MAX_STRONG_AI_METRIC_SAMPLES);
+    stats.roundTripDurationsMs = [...(stats.roundTripDurationsMs ?? []), roundTripMs].slice(-MAX_STRONG_AI_METRIC_SAMPLES);
+    stats.publicViewDurationsMs = [...(stats.publicViewDurationsMs ?? []), publicViewMs].slice(-MAX_STRONG_AI_METRIC_SAMPLES);
+    stats.transportDurationsMs = [...(stats.transportDurationsMs ?? []), transportMs].slice(-MAX_STRONG_AI_METRIC_SAMPLES);
+    stats.samplesPerDecision = [...(stats.samplesPerDecision ?? []), result.samplesUsed ?? 0].slice(
+      -MAX_STRONG_AI_METRIC_SAMPLES,
+    );
     stats.lastContext = result.context ?? null;
     stats.lastProfile = {
       elapsedMs: result.elapsedMs ?? 0,
@@ -696,6 +722,7 @@ export default function App() {
 
   function submitBid(playerId, amount) {
     mutateGame((state) => {
+      state.bidInfo.history = [...(state.bidInfo.history ?? []), { playerId, amount }];
       if (amount > 0) {
         state.bidInfo.highBid = amount;
         state.bidInfo.bidder = playerId;

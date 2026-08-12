@@ -20,6 +20,7 @@ export function createPublicSearchView(state, playerId) {
     bidInfo: {
       ...state.bidInfo,
       passed: [...state.bidInfo.passed],
+      history: (state.bidInfo.history ?? []).map((action) => ({ ...action })),
     },
     tricks: state.tricks.map((trick) => trick.map((play) => ({ ...play }))),
     currentTrick: state.currentTrick.map((play) => ({ ...play })),
@@ -46,6 +47,10 @@ export function deriveStrongAiSeed(publicState, playerId) {
   seed = mixSeed(seed, publicState.pointsTaken.us ?? 0);
   seed = mixSeed(seed, publicState.pointsTaken.them ?? 0);
   seed = mixSeed(seed, publicState.bidInfo?.highBid ?? 0);
+
+  (publicState.bidInfo?.history ?? []).forEach((action) => {
+    seed = mixSeed(seed, (action.playerId + 1) * 211 + (action.amount ?? 0));
+  });
 
   publicCardIds.forEach((cardId) => {
     seed = mixSeed(seed, cardId + 31);

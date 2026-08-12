@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Rook external expert evidence",
+  "type": "object",
+  "required": ["schemaVersion", "source", "ruleset", "consent", "scenarios"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "source": {
+      "type": "object",
+      "required": ["id", "qualification", "external"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "qualification": { "type": "string", "minLength": 1 },
+        "external": { "const": true },
+        "privateSourceCommitment": {
+          "type": ["string", "null"],
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "ruleset": { "type": "string", "minLength": 1 },
+    "consent": {
+      "type": "object",
+      "required": ["aggregatePublication"],
+      "properties": { "aggregatePublication": { "type": "boolean" } }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "phase", "publicState", "legalChoices", "expertChoice"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "phase": { "enum": ["bid", "kitty", "play"] },
+          "publicState": { "type": "object" },
+          "legalChoices": { "type": "array", "minItems": 1 },
+          "expertChoice": {},
+          "ranking": { "type": "array" },
+          "rationale": { "type": "string" }
+        }
+      }
+    }
+  }
+}

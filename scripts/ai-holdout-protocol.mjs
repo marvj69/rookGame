@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -39,6 +40,41 @@ const SEARCH_ARG_CONFIG = Object.freeze([
   ["search-sample-attempts", "maxSampleAttempts"],
   ["search-endgame", "exactEndgameHandSize"],
   ["search-node-limit", "exactNodeLimit"],
+  ["search-exact-weight", "exactValueWeight"],
+  ["search-exact-pure-hand", "exactPureHandSize"],
+  ["search-exact-min-position", "exactMaxHandMinTrickPosition"],
+  ["search-exact-max-position", "exactMaxHandMaxTrickPosition"],
+  ["search-exact-opponent-branches", "exactOpponentMaxBranches"],
+  ["search-exact-opponent-pure-hand", "exactOpponentPureHandSize"],
+  ["search-exact-min-known-voids", "exactMaxHandMinKnownVoids"],
+  ["search-rollout-max-hand", "rolloutMaxHandSize"],
+  ["search-rollout-exact-handoff", "rolloutExactHandoffHandSize"],
+  ["search-rollout-exact-nodes", "rolloutExactNodeLimit"],
+  ["search-trick-plies", "trickLookaheadPlies"],
+  ["search-trick-branches", "trickLookaheadBranches"],
+  ["search-trick-blend", "trickLookaheadBlend"],
+  ["search-start-trick", "searchStartTrick"],
+  ["search-opening-margin", "openingOverrideMargin"],
+  ["search-heuristic-margin", "heuristicOverrideMargin"],
+  ["search-heuristic-z", "heuristicOverrideZ"],
+  ["search-early-stop", "earlyStopLead"],
+  ["search-adaptive-min-samples", "adaptiveMinSamples"],
+  ["search-adaptive-z", "adaptiveConfidenceZ"],
+  ["search-adaptive-margin", "adaptiveScoreMargin"],
+  ["search-information-iterations", "informationSetIterations"],
+  ["search-information-plies", "informationSetTreePlies"],
+  ["search-information-candidates", "informationSetMaxCandidates"],
+  ["search-information-trigger", "informationSetTriggerMargin"],
+  ["search-information-exploration", "informationSetExploration"],
+  ["search-information-blend", "informationSetBlend"],
+  ["search-risk-aversion", "riskAversion"],
+  ["search-root-cvar-fraction", "rootCvarFraction"],
+]);
+const SEARCH_BOOLEAN_ARG_CONFIG = Object.freeze([
+  ["belief-weighting", "no-belief-weighting", "beliefWeighting"],
+  ["adaptive-sampling", "no-adaptive-sampling", "adaptiveSampling"],
+  ["exact-policy-ordering", "no-exact-policy-ordering", "exactPolicyOrdering"],
+  ["exact-sequence-pruning", "no-exact-sequence-pruning", "exactSequencePruning"],
 ]);
 const PRIVATE_HOLDOUT_ENV = "ROOK_PRIVATE_HOLDOUT_FILE";
 const PRIVATE_HOLDOUT_MIN_SEEDS = 20;
@@ -63,11 +99,31 @@ function getArgNumber(args, name, fallback, min = 1) {
 }
 
 function createSearchArgs(args, defaults = {}) {
-  return SEARCH_ARG_CONFIG.flatMap(([argName, configKey]) => {
+  const valueArgs = SEARCH_ARG_CONFIG.flatMap(([argName, configKey]) => {
     const rawValue = getArgValue(args, argName);
     const value = rawValue ?? defaults[configKey];
     return value === undefined || value === null ? [] : [`--${argName}=${value}`];
   });
+  const booleanArgs = SEARCH_BOOLEAN_ARG_CONFIG.flatMap(([enabledArg, disabledArg, configKey]) => {
+    if (hasFlag(args, enabledArg)) return [`--${enabledArg}`];
+    if (hasFlag(args, disabledArg)) return [`--${disabledArg}`];
+    if (defaults[configKey] === true) return [`--${enabledArg}`];
+    if (defaults[configKey] === false) return [`--${disabledArg}`];
+    return [];
+  });
+  const samplerArg = ["matching", "stratified", "greedy"]
+    .map((sampler) => `${sampler}-sampler`)
+    .find((argName) => hasFlag(args, argName));
+  const defaultSamplerArg = defaults.hiddenHandSampler ? `${defaults.hiddenHandSampler}-sampler` : null;
+  const rootAggregation = getArgValue(args, "search-root-aggregation") ?? defaults.rootAggregation;
+
+  return [
+    ...valueArgs,
+    ...booleanArgs,
+    ...(hasFlag(args, "no-information-set") ? ["--no-information-set"] : []),
+    ...(samplerArg || defaultSamplerArg ? [`--${samplerArg || defaultSamplerArg}`] : []),
+    ...(rootAggregation ? [`--search-root-aggregation=${rootAggregation}`] : []),
+  ];
 }
 
 function createBenchmarkOptionsForSeed(options, seed) {
@@ -133,7 +189,6 @@ export function createHoldoutOptions(args = process.argv.slice(2)) {
         exposed: false,
         seeds: privateSeedSource.seeds,
         defaultGamesPerSeed: PRIVATE_HOLDOUT_DEFAULT_GAMES_PER_SEED,
-        minDecisionGames: PRIVATE_HOLDOUT_MIN_SEEDS * PRIVATE_HOLDOUT_DEFAULT_GAMES_PER_SEED * 2,
         defaultGate: "promotion",
         search: { profile: "live" },
       }
@@ -156,6 +211,11 @@ export function createHoldoutOptions(args = process.argv.slice(2)) {
   const candidateEngineId = resolveEngineId(getArgValue(args, "candidate") ?? CHALLENGER_ENGINE_ID);
   const opponentEngineId = resolveEngineId(getArgValue(args, "opponent") ?? CHAMPION_ENGINE_ID);
   const searchProfile = getArgValue(args, "profile") ?? seedGroup.search?.profile ?? "live";
+  const rawSeedWorkers = getArgValue(args, "seed-workers") ?? "1";
+  const seedWorkers =
+    rawSeedWorkers === "auto"
+      ? Math.max(1, Math.min(seeds.length, Math.floor(availableParallelism() / 2), 4))
+      : Math.max(1, Math.min(seeds.length, Math.floor(Number(rawSeedWorkers) || 1)));
 
   return {
     seedGroup,
@@ -169,6 +229,7 @@ export function createHoldoutOptions(args = process.argv.slice(2)) {
     privateHoldout: Boolean(privateSeedSource),
     seedCommitment: privateSeedSource?.commitment ?? null,
     rawWorkers: getArgValue(args, "workers") ?? "auto",
+    seedWorkers,
     searchArgs: createSearchArgs(args, seedGroup.search),
     strict: hasFlag(args, "strict"),
     includeJson: hasFlag(args, "json"),
@@ -223,14 +284,26 @@ export async function runHoldoutEvaluation(options = createHoldoutOptions(), { o
   const total = createBenchmarkTotal();
   const seedResults = [];
 
-  // Each benchmark already parallelizes its mirrored games. Running every seed
-  // concurrently would multiply the worker count and make wall-clock behavior
-  // dependent on machine load.
-  for (const [seedIndex, seed] of options.seeds.entries()) {
-    const result = await runBenchmark(createBenchmarkOptionsForSeed(options, seed));
-    seedResults.push({ seed, result });
-    onSeedComplete?.({ completed: seedIndex + 1, total: options.seeds.length });
+  let nextSeedIndex = 0;
+  let completedSeeds = 0;
+
+  async function runNextSeed() {
+    while (nextSeedIndex < options.seeds.length) {
+      const seedIndex = nextSeedIndex;
+      nextSeedIndex += 1;
+      const seed = options.seeds[seedIndex];
+      const perSeedOptions =
+        options.seedWorkers > 1
+          ? { ...options, rawWorkers: "2" }
+          : options;
+      const result = await runBenchmark(createBenchmarkOptionsForSeed(perSeedOptions, seed));
+      seedResults.push({ seed, result });
+      completedSeeds += 1;
+      onSeedComplete?.({ completed: completedSeeds, total: options.seeds.length });
+    }
   }
+
+  await Promise.all(Array.from({ length: options.seedWorkers }, runNextSeed));
 
   seedResults
     .sort((a, b) => a.seed - b.seed)
@@ -271,6 +344,8 @@ export function formatHoldoutReport(evaluation) {
     `Search profile: ${options.searchProfile}`,
     `Games per seed per orientation: ${options.gamesPerSeed}`,
     `Minimum games for decision: ${options.minDecisionGames}`,
+    `Concurrent seed batches: ${options.seedWorkers}`,
+    `Workers per concurrent batch: ${options.seedWorkers > 1 ? 2 : options.rawWorkers}`,
     `Search overrides: ${options.searchArgs.length ? options.searchArgs.join(" ") : "benchmark defaults"}`,
     `Total games: ${decision.metrics.games}`,
     `Win rate: ${decision.metrics.wins}/${decision.metrics.games} (${pct(decision.metrics.winRate)})`,
@@ -332,6 +407,7 @@ export function createHoldoutArtifact(evaluation) {
       seedCount: options.seeds.length,
     },
     gamesPerSeedPerOrientation: options.gamesPerSeed,
+    concurrentSeedBatches: options.seedWorkers,
     candidate: options.candidateEngineId,
     opponent: options.opponentEngineId,
     gate: options.gate.id,

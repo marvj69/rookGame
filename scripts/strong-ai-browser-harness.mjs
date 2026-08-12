@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { quantile } from "./ai-statistics.mjs";
 
 const require = createRequire(import.meta.url);
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -81,6 +82,8 @@ function createOptions(args) {
     includeJson: !hasFlag(args, "no-json"),
     failOnFallback: hasFlag(args, "fail-on-fallback"),
     maxFallbackRate: getArgValue(args, "max-fallback-rate"),
+    maxWorkerP95Ms: getArgValue(args, "max-worker-p95-ms"),
+    maxRoundTripP95Ms: getArgValue(args, "max-round-trip-p95-ms"),
   };
 }
 
@@ -374,6 +377,21 @@ function reasonDeltas(start, end) {
   );
 }
 
+function recentMetricSamples(endStats, key, count) {
+  if (count <= 0) return [];
+  return (endStats?.[key] ?? []).slice(-count).filter(Number.isFinite);
+}
+
+function distribution(values) {
+  return {
+    count: values.length,
+    p50: quantile(values, 0.5),
+    p95: quantile(values, 0.95),
+    p99: quantile(values, 0.99),
+    max: values.length > 0 ? Math.max(...values) : 0,
+  };
+}
+
 function summarizeStats(startStats, endStats) {
   const searchRequested = metricDelta(startStats, endStats, "searchRequested");
   const searchCompleted = metricDelta(startStats, endStats, "searchCompleted");
@@ -403,6 +421,13 @@ function summarizeStats(startStats, endStats) {
     fallbackReasons: reasonDeltas(startStats, endStats),
     timeoutContexts: (endStats?.timeoutContexts ?? []).slice((startStats?.timeoutContexts ?? []).length),
     lastProfile: endStats?.lastProfile ?? null,
+    metricSamples: {
+      workerMs: recentMetricSamples(endStats, "workerDurationsMs", searchCompleted),
+      roundTripMs: recentMetricSamples(endStats, "roundTripDurationsMs", searchCompleted),
+      publicViewMs: recentMetricSamples(endStats, "publicViewDurationsMs", searchCompleted),
+      transportMs: recentMetricSamples(endStats, "transportDurationsMs", searchCompleted),
+      samples: recentMetricSamples(endStats, "samplesPerDecision", searchCompleted),
+    },
   };
 }
 
@@ -421,6 +446,9 @@ function mergeSummary(total, next) {
     total.fallbackReasons[reason] = (total.fallbackReasons[reason] ?? 0) + count;
   });
   total.timeoutContexts = [...total.timeoutContexts, ...next.timeoutContexts].slice(-20);
+  Object.keys(total.metricSamples).forEach((key) => {
+    total.metricSamples[key].push(...next.metricSamples[key]);
+  });
 }
 
 function createAggregate() {
@@ -437,6 +465,13 @@ function createAggregate() {
     totalSamplesWeighted: 0,
     fallbackReasons: {},
     timeoutContexts: [],
+    metricSamples: {
+      workerMs: [],
+      roundTripMs: [],
+      publicViewMs: [],
+      transportMs: [],
+      samples: [],
+    },
   };
 }
 
@@ -523,6 +558,17 @@ function assertReliability(summary, options) {
       );
     }
   }
+
+  for (const [rawLimit, metric, label] of [
+    [options.maxWorkerP95Ms, aggregate.latency.workerMs, "worker"],
+    [options.maxRoundTripP95Ms, aggregate.latency.roundTripMs, "round-trip"],
+  ]) {
+    if (rawLimit === null) continue;
+    const limit = Number(rawLimit);
+    if (Number.isFinite(limit) && metric.p95 > limit) {
+      throw new Error(`${label} p95 ${formatNumber(metric.p95, 2)}ms exceeded ${formatNumber(limit, 2)}ms.`);
+    }
+  }
 }
 
 async function runHarness(options) {
@@ -583,9 +629,11 @@ async function runHarness(options) {
         const endStats = (await getPageState(page)).stats;
         const handSummary = summarizeStats(startStats, endStats);
         mergeSummary(aggregate, handSummary);
+        const { metricSamples, ...reportedHandSummary } = handSummary;
         handResults.push({
           hand: handIndex + 1,
-          ...handSummary,
+          ...reportedHandSummary,
+          latency: Object.fromEntries(Object.entries(metricSamples).map(([key, values]) => [key, distribution(values)])),
           snapshots: handResult.snapshots.slice(-8),
         });
 
@@ -607,14 +655,16 @@ async function runHarness(options) {
     }
 
     const completedHands = options.games * options.handsPerGame;
+    const { metricSamples, ...aggregateCounters } = aggregate;
     const aggregateSummary = {
-      ...aggregate,
+      ...aggregateCounters,
       completionRate: aggregate.searchRequested > 0 ? aggregate.searchCompleted / aggregate.searchRequested : 1,
       fallbackRate: aggregate.searchRequested > 0 ? aggregate.fallbacks / aggregate.searchRequested : 0,
       timeoutRate: aggregate.searchRequested > 0 ? aggregate.timeouts / aggregate.searchRequested : 0,
       averageWorkerMs: aggregate.searchCompleted > 0 ? aggregate.totalWorkerWeighted / aggregate.searchCompleted : 0,
       averageRoundTripMs: aggregate.searchCompleted > 0 ? aggregate.totalRoundTripWeighted / aggregate.searchCompleted : 0,
       averageSamples: aggregate.searchCompleted > 0 ? aggregate.totalSamplesWeighted / aggregate.searchCompleted : 0,
+      latency: Object.fromEntries(Object.entries(metricSamples).map(([key, values]) => [key, distribution(values)])),
     };
 
     const cacheSanity = await collectCacheSanity(page, options.baseUrl, expectedAssets, observedUrls);
@@ -663,6 +713,18 @@ function printSummary(summary, includeJson) {
   console.log(`Average worker ms: ${formatNumber(aggregate.averageWorkerMs, 2)}`);
   console.log(`Average round-trip ms: ${formatNumber(aggregate.averageRoundTripMs, 2)}`);
   console.log(`Average samples: ${formatNumber(aggregate.averageSamples, 2)}`);
+  console.log(
+    `Worker latency p50/p95/p99: ${formatNumber(aggregate.latency.workerMs.p50, 2)}/${formatNumber(
+      aggregate.latency.workerMs.p95,
+      2,
+    )}/${formatNumber(aggregate.latency.workerMs.p99, 2)} ms`,
+  );
+  console.log(
+    `Round-trip latency p50/p95/p99: ${formatNumber(aggregate.latency.roundTripMs.p50, 2)}/${formatNumber(
+      aggregate.latency.roundTripMs.p95,
+      2,
+    )}/${formatNumber(aggregate.latency.roundTripMs.p99, 2)} ms`,
+  );
   console.log(`Fallback reasons: ${JSON.stringify(aggregate.fallbackReasons)}`);
   console.log(`Timeout contexts: ${JSON.stringify(aggregate.timeoutContexts.slice(-5))}`);
   console.log(

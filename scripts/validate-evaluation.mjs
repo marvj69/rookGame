@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import {
+  evaluateMatchStateAfterRound,
   evaluateTerminalRound,
   evaluateTrickDecision,
   getCardSpendCost,
+  getProjectedMatchOutcome,
 } from "../src/ai/evaluation.js";
 import { buildDeck, sortHand } from "../src/game.js";
 
@@ -29,6 +31,8 @@ function baseGame(overrides = {}) {
     },
     currentTrick: [],
     tricks: [],
+    scores: { us: 0, them: 0 },
+    settings: { mustWinByBid: false },
     ...overrides,
   };
 }
@@ -49,6 +53,50 @@ function baseGame(overrides = {}) {
   const bidderView = evaluateTerminalRound(setBidTeam, 0);
 
   assert.ok(opponentView - bidderView >= 350, "setting the bidding team is heavily rewarded");
+}
+
+{
+  const contractWin = baseGame({
+    scores: { us: 490, them: 430 },
+    settings: { mustWinByBid: true },
+  });
+  const completedRound = {
+    bidTeam: "us",
+    scoreChange: { us: 20, them: 10 },
+  };
+  const outcome = getProjectedMatchOutcome(contractWin, completedRound);
+
+  assert.equal(outcome.winnerTeam, "us", "crossing 500 on the bidding team wins a must-win-by-bid match");
+  assert.equal(
+    evaluateMatchStateAfterRound(contractWin, 0, completedRound),
+    1200,
+    "a projected match win receives the configured terminal reward",
+  );
+}
+
+{
+  const blockedWin = baseGame({
+    scores: { us: 490, them: 400 },
+    settings: { mustWinByBid: true },
+  });
+  const normalWin = {
+    ...blockedWin,
+    settings: { mustWinByBid: false },
+  };
+  const completedRound = {
+    bidTeam: "them",
+    scoreChange: { us: 20, them: 10 },
+  };
+  const blockedOutcome = getProjectedMatchOutcome(blockedWin, completedRound);
+
+  assert.equal(blockedOutcome.reachedTarget, true, "the leading team crossed the target");
+  assert.equal(blockedOutcome.winnerTeam, null, "a non-bidding team cannot finish a must-win-by-bid match");
+  assert.ok(
+    evaluateMatchStateAfterRound(normalWin, 0, completedRound) -
+      evaluateMatchStateAfterRound(blockedWin, 0, completedRound) >
+      1000,
+    "search distinguishes an actual match win from a blocked target crossing",
+  );
 }
 
 {

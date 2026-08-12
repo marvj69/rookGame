@@ -1,0 +1,282 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-08-12T09:57:56.470Z",
+  "seedGroup": {
+    "id": "private-9b9eaf340ccd",
+    "role": "private-holdout",
+    "exposed": false,
+    "commitment": "9b9eaf340ccd06150045599820ada8cfd4c3c62fbf0ba759853c26e16f5b339f",
+    "seedCount": 20
+  },
+  "gamesPerSeedPerOrientation": 5,
+  "concurrentSeedBatches": 4,
+  "candidate": "challenger",
+  "opponent": "champion-2026-08-11",
+  "gate": "consideration",
+  "searchProfile": "live",
+  "deterministicSearch": true,
+  "status": "PASS",
+  "reason": "The challenger satisfied the holdout advancement gate.",
+  "elapsedMs": 4319960.327041,
+  "metrics": {
+    "games": 200,
+    "unfinishedGames": 0,
+    "wins": 116,
+    "winRate": 0.58,
+    "winRateLow95": 0.5107207393958046,
+    "winRateHigh95": 0.6462640083838327,
+    "pairedWinRateLow95": 0.53,
+    "pairedWinRateHigh95": 0.625,
+    "pairedClusters": 100,
+    "seedClusterWinRateLow95": 0.5399999999999999,
+    "seedClusterWinRateHigh95": 0.615,
+    "seedClusters": 20,
+    "conservativeWinRateLow95": 0.53,
+    "conservativeWinRateHigh95": 0.625,
+    "approximateEloDelta": 56.0714812660147,
+    "averageMargin": 65.9,
+    "rounds": 1251,
+    "candidateRoundScoreAverage": 64.59232613908873,
+    "baselineRoundScoreAverage": 54.05675459632294,
+    "candidateBidsWon": 605,
+    "baselineBidsWon": 646,
+    "candidateBidMakeRate": 0.7289256198347107,
+    "baselineBidMakeRate": 0.6563467492260062,
+    "candidateDecisions": 37538,
+    "baselineDecisions": 37568,
+    "totalDecisions": 75106,
+    "decisionsPerGame": 375.53,
+    "illegalMoves": 0,
+    "decisionKinds": {
+      "bid": 8803,
+      "kitty": 1251,
+      "play": 65052
+    },
+    "decisionKindRuntimeMs": {
+      "bid": 3029.0333609907457,
+      "kitty": 59827.01709299981,
+      "play": 29325211.14643602
+    },
+    "rolePerformance": {
+      "candidate": {
+        "bidRounds": 605,
+        "madeBids": 441,
+        "failedBids": 164,
+        "defenseRounds": 646,
+        "sets": 222,
+        "scoreAsBidder": 45050,
+        "scoreAsDefender": 35755
+      },
+      "baseline": {
+        "bidRounds": 646,
+        "madeBids": 424,
+        "failedBids": 222,
+        "defenseRounds": 605,
+        "sets": 164,
+        "scoreAsBidder": 36375,
+        "scoreAsDefender": 31250
+      }
+    },
+    "trickPerformance": {
+      "candidate": {
+        "early": {
+          "won": 2491,
+          "points": 37000
+        },
+        "middle": {
+          "won": 3211,
+          "points": 42615
+        },
+        "endgame": {
+          "won": 2463,
+          "points": 33790
+        }
+      },
+      "baseline": {
+        "early": {
+          "won": 2513,
+          "points": 37515
+        },
+        "middle": {
+          "won": 3044,
+          "points": 40420
+        },
+        "endgame": {
+          "won": 2541,
+          "points": 33840
+        }
+      }
+    },
+    "searchDecisions": 65052,
+    "searchFallbacks": 0,
+    "searchFallbackRate": 0,
+    "searchSamples": 1661280,
+    "averageSearchSamplesPerDecision": 25.53772366722007,
+    "averageSearchMsPerDecision": 450.71640499701766,
+    "searchTimeouts": 0,
+    "illegalBids": 0,
+    "illegalDiscards": 0,
+    "illegalPlays": 0,
+    "elapsedMs": 4319960.327041,
+    "averageRuntimeMsPerGame": 21599.801635205,
+    "averageMeasuredMsPerDecision": 391.28787576079156,
+    "candidateDecisionRuntimeMs": 27263359.700005025,
+    "baselineDecisionRuntimeMs": 2124707.496884988
+  },
+  "fingerprint": {
+    "games": 200,
+    "wins": 116,
+    "margin": 13180,
+    "unfinishedGames": 0,
+    "rounds": 1251,
+    "bids": {
+      "candidate": 2510,
+      "baseline": 2540
+    },
+    "roundBids": {
+      "candidate": 605,
+      "baseline": 646
+    },
+    "madeBids": {
+      "candidate": 441,
+      "baseline": 424
+    },
+    "failedBids": {
+      "candidate": 164,
+      "baseline": 222
+    },
+    "roundScore": {
+      "candidate": 80805,
+      "baseline": 67625
+    },
+    "decisions": {
+      "candidate": 37538,
+      "baseline": 37568
+    },
+    "decisionKinds": {
+      "bid": 8803,
+      "kitty": 1251,
+      "play": 65052
+    },
+    "rolePerformance": {
+      "candidate": {
+        "bidRounds": 605,
+        "madeBids": 441,
+        "failedBids": 164,
+        "defenseRounds": 646,
+        "sets": 222,
+        "scoreAsBidder": 45050,
+        "scoreAsDefender": 35755
+      },
+      "baseline": {
+        "bidRounds": 646,
+        "madeBids": 424,
+        "failedBids": 222,
+        "defenseRounds": 605,
+        "sets": 164,
+        "scoreAsBidder": 36375,
+        "scoreAsDefender": 31250
+      }
+    },
+    "trickPerformance": {
+      "candidate": {
+        "early": {
+          "won": 2491,
+          "points": 37000
+        },
+        "middle": {
+          "won": 3211,
+          "points": 42615
+        },
+        "endgame": {
+          "won": 2463,
+          "points": 33790
+        }
+      },
+      "baseline": {
+        "early": {
+          "won": 2513,
+          "points": 37515
+        },
+        "middle": {
+          "won": 3044,
+          "points": 40420
+        },
+        "endgame": {
+          "won": 2541,
+          "points": 33840
+        }
+      }
+    },
+    "search": {
+      "decisions": 65052,
+      "fallbacks": 0,
+      "samples": 1661280,
+      "timeouts": 0
+    },
+    "paired": {
+      "pairs": 100,
+      "candidateWins": 116,
+      "games": 200,
+      "margin": 13180
+    },
+    "illegalMoves": 0,
+    "illegal": {
+      "bids": 0,
+      "discards": 0,
+      "plays": 0
+    }
+  },
+  "categories": {
+    "rolePerformance": {
+      "candidate": {
+        "bidRounds": 605,
+        "madeBids": 441,
+        "failedBids": 164,
+        "defenseRounds": 646,
+        "sets": 222,
+        "scoreAsBidder": 45050,
+        "scoreAsDefender": 35755
+      },
+      "baseline": {
+        "bidRounds": 646,
+        "madeBids": 424,
+        "failedBids": 222,
+        "defenseRounds": 605,
+        "sets": 164,
+        "scoreAsBidder": 36375,
+        "scoreAsDefender": 31250
+      }
+    },
+    "trickPerformance": {
+      "candidate": {
+        "early": {
+          "won": 2491,
+          "points": 37000
+        },
+        "middle": {
+          "won": 3211,
+          "points": 42615
+        },
+        "endgame": {
+          "won": 2463,
+          "points": 33790
+        }
+      },
+      "baseline": {
+        "early": {
+          "won": 2513,
+          "points": 37515
+        },
+        "middle": {
+          "won": 3044,
+          "points": 40420
+        },
+        "endgame": {
+          "won": 2541,
+          "points": 33840
+        }
+      }
+    }
+  }
+}

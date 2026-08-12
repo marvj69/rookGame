@@ -7,12 +7,28 @@ import { evaluateSampledPlayCandidates as evaluateChallengerSearch } from "../sr
 import * as oldBaselineAi from "./current-ai-baseline.mjs";
 import * as previousChampionAi from "./champions/strong-search-2026-07-02.mjs";
 import * as championAi from "./champions/strong-search-2026-08-11.mjs";
+import { conservativeProbeAi, pointHunterProbeAi, pressureProbeAi } from "./adversarial-ai.mjs";
 
 export const CHALLENGER_ENGINE_ID = "challenger";
 export const CURRENT_ENGINE_ID = "current";
 export const OLD_BASELINE_ENGINE_ID = "old-baseline";
 export const PREVIOUS_CHAMPION_ENGINE_ID = previousChampionAi.championMetadata.id;
 export const CHAMPION_ENGINE_ID = championAi.championMetadata.id;
+export const PRESSURE_PROBE_ENGINE_ID = "probe-pressure";
+export const CONSERVATIVE_PROBE_ENGINE_ID = "probe-conservative";
+export const POINT_HUNTER_PROBE_ENGINE_ID = "probe-point-hunter";
+export const SEARCH_V3_ABLATION_ENGINE_ID = "ablation-search-v3";
+export const AUCTION_KITTY_V3_ABLATION_ENGINE_ID = "ablation-auction-kitty-v3";
+export const FROZEN_OPPONENT_LEAGUE = Object.freeze([
+  OLD_BASELINE_ENGINE_ID,
+  PREVIOUS_CHAMPION_ENGINE_ID,
+  CHAMPION_ENGINE_ID,
+]);
+export const ADVERSARIAL_OPPONENT_LEAGUE = Object.freeze([
+  PRESSURE_PROBE_ENGINE_ID,
+  CONSERVATIVE_PROBE_ENGINE_ID,
+  POINT_HUNTER_PROBE_ENGINE_ID,
+]);
 
 const ENGINE_DEFINITIONS = Object.freeze({
   [CHALLENGER_ENGINE_ID]: Object.freeze({
@@ -58,6 +74,49 @@ const ENGINE_DEFINITIONS = Object.freeze({
     liveSearchConfig: championAi.championMetadata.liveSearchConfig,
     metadata: championAi.championMetadata,
   }),
+  [PRESSURE_PROBE_ENGINE_ID]: Object.freeze({
+    id: PRESSURE_PROBE_ENGINE_ID,
+    name: "Auction and trump pressure probe",
+    ai: pressureProbeAi,
+    evaluateSearch: null,
+    usesSearch: false,
+  }),
+  [CONSERVATIVE_PROBE_ENGINE_ID]: Object.freeze({
+    id: CONSERVATIVE_PROBE_ENGINE_ID,
+    name: "Conservative control probe",
+    ai: conservativeProbeAi,
+    evaluateSearch: null,
+    usesSearch: false,
+  }),
+  [POINT_HUNTER_PROBE_ENGINE_ID]: Object.freeze({
+    id: POINT_HUNTER_PROBE_ENGINE_ID,
+    name: "Point-capture probe",
+    ai: pointHunterProbeAi,
+    evaluateSearch: null,
+    usesSearch: false,
+  }),
+  [SEARCH_V3_ABLATION_ENGINE_ID]: Object.freeze({
+    id: SEARCH_V3_ABLATION_ENGINE_ID,
+    name: "Ablation: v3 search with frozen champion auction and kitty",
+    ai: Object.freeze({
+      chooseBotBid: championAi.chooseBotBid,
+      chooseBotKittyPlan: championAi.chooseBotKittyPlan,
+      chooseBotPlay: challengerAi.chooseBotPlay,
+    }),
+    evaluateSearch: evaluateChallengerSearch,
+    usesSearch: true,
+    defaultSearchConfig: CHALLENGER_DEFAULT_SEARCH_CONFIG,
+    liveSearchConfig: CHALLENGER_LIVE_SEARCH_CONFIG,
+  }),
+  [AUCTION_KITTY_V3_ABLATION_ENGINE_ID]: Object.freeze({
+    id: AUCTION_KITTY_V3_ABLATION_ENGINE_ID,
+    name: "Ablation: v3 auction and kitty with frozen champion search",
+    ai: challengerAi,
+    evaluateSearch: championAi.evaluateSampledPlayCandidates,
+    usesSearch: true,
+    defaultSearchConfig: championAi.championMetadata.defaultSearchConfig,
+    liveSearchConfig: championAi.championMetadata.liveSearchConfig,
+  }),
 });
 
 const ENGINE_ALIASES = Object.freeze({
@@ -80,6 +139,11 @@ const ENGINE_ALIASES = Object.freeze({
   [PREVIOUS_CHAMPION_ENGINE_ID]: PREVIOUS_CHAMPION_ENGINE_ID,
   "strong-search-2026-08-11": CHAMPION_ENGINE_ID,
   [CHAMPION_ENGINE_ID]: CHAMPION_ENGINE_ID,
+  pressure: PRESSURE_PROBE_ENGINE_ID,
+  conservative: CONSERVATIVE_PROBE_ENGINE_ID,
+  "point-hunter": POINT_HUNTER_PROBE_ENGINE_ID,
+  "search-v3-only": SEARCH_V3_ABLATION_ENGINE_ID,
+  "auction-kitty-v3-only": AUCTION_KITTY_V3_ABLATION_ENGINE_ID,
 });
 
 export function listBenchmarkEngineIds() {
@@ -120,7 +184,16 @@ export function expandOpponentEngineIds(rawValue, { includeBothBaselines = false
   const value = rawValue ?? CHAMPION_ENGINE_ID;
   const normalized = String(value).trim().toLowerCase();
 
-  if (includeBothBaselines || ["both", "all", "both-baselines", "all-baselines"].includes(normalized)) {
+  if (["league", "frozen-league", "all", "all-baselines"].includes(normalized)) {
+    return [...FROZEN_OPPONENT_LEAGUE];
+  }
+  if (["adversarial", "adversarial-league", "probes"].includes(normalized)) {
+    return [...ADVERSARIAL_OPPONENT_LEAGUE];
+  }
+  if (["robust-league", "full-league"].includes(normalized)) {
+    return [...FROZEN_OPPONENT_LEAGUE, ...ADVERSARIAL_OPPONENT_LEAGUE];
+  }
+  if (includeBothBaselines || ["both", "both-baselines"].includes(normalized)) {
     return [OLD_BASELINE_ENGINE_ID, CHAMPION_ENGINE_ID];
   }
 
